@@ -1,0 +1,14 @@
+packages:
+  "framer-motion": "Animations and page transitions for premium feel"
+  "date-fns": "Date formatting for history logs"
+  "clsx": "Utility for conditionally joining classNames"
+  "tailwind-merge": "Utility for merging tailwind classes safely"
+  "lucide-react": "Beautiful icons"
+
+images: []
+
+notes:
+  - "Using React Context for all state management as requested (no real API needed for demo)."
+  - "Implemented a comprehensive mock store with seeded data for all product states."
+  - "Cost breakdown calculations implemented in the Analysis Result page."
+  - "Tailwind v4 CSS variables configured for a clean, professional enterprise light mode."
