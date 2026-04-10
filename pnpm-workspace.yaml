@@ -1,0 +1,6 @@
+packages:
+  - "api-server"
+  - "xborder-selection"
+  - "packages/*"
+allowBuilds:
+  esbuild: true
