@@ -11,6 +11,7 @@ import {
   ManagerActionBody,
 } from "@workspace/api-zod";
 import { fetchAndStoreImage, fetchAndStoreImages } from "../lib/fetchAndStoreImage";
+import { assertTransitOrThrow, type ProductAction, type ProductFromStatus } from "../domain/product-state-machine";
 
 const router: IRouter = Router();
 
@@ -207,21 +208,29 @@ router.post("/products", async (req, res) => {
   const id = randomUUID();
   const data = body.data;
 
-  let status: string;
+  let createAction: ProductAction;
   switch (data.action) {
     case "pending_info":
-      status = "pending_info";
+      createAction = "create_pending_info";
       break;
     case "submit_analysis":
-      status = "pending_analysis";
+      createAction = "create_submit_analysis";
       break;
     default:
-      status = "draft";
+      createAction = "create_draft";
+  }
+  let finalStatus: string;
+  try {
+    finalStatus = assertTransitOrThrow("__new__", createAction);
+  } catch (err) {
+    res.status(400).json({ error: (err as Error).message });
+    return;
   }
 
   const costs = calcCosts(data as Record<string, unknown>);
-  const ai = status === "pending_analysis" ? mockAiAnalysis({ ...data, ...costs } as Record<string, unknown>) : {};
-  const finalStatus = status === "pending_analysis" ? "analyzed_pending_review" : status;
+  const ai = data.action === "submit_analysis"
+    ? mockAiAnalysis({ ...data, ...costs } as Record<string, unknown>)
+    : {};
 
   const historyLog = [
     {
@@ -268,7 +277,7 @@ router.post("/products", async (req, res) => {
     createdAt: now,
     updatedBy: data.submitterName,
     updatedAt: now,
-    analysisSubmittedAt: status === "pending_analysis" ? now : undefined,
+    analysisSubmittedAt: data.action === "submit_analysis" ? now : undefined,
     historyLog,
   });
 
@@ -394,19 +403,30 @@ router.put("/products/:id", async (req, res) => {
   const merged = { ...existing, ...data };
   const costs = calcCosts(merged as Record<string, unknown>);
 
-  let newStatus: string;
-  switch (data.action) {
-    case "pending_info":
-      newStatus = "pending_info";
-      break;
-    case "submit_analysis":
-      newStatus = "analyzed_pending_review";
-      break;
-    case "draft":
-      newStatus = "draft";
-      break;
-    default:
-      newStatus = existing.status;
+  let newStatus: string = existing.status;
+  if (data.action) {
+    let updateAction: ProductAction | null = null;
+    switch (data.action) {
+      case "pending_info":
+        updateAction = "update_pending_info";
+        break;
+      case "submit_analysis":
+        updateAction = "update_submit_analysis";
+        break;
+      case "draft":
+        updateAction = "update_draft";
+        break;
+      default:
+        updateAction = null;
+    }
+    if (updateAction) {
+      try {
+        newStatus = assertTransitOrThrow(existing.status as ProductFromStatus, updateAction);
+      } catch (err) {
+        res.status(400).json({ error: (err as Error).message });
+        return;
+      }
+    }
   }
 
   const ai = data.action === "submit_analysis"
@@ -497,19 +517,26 @@ async function handleRunAnalysis(req: import("express").Request, res: import("ex
   const costs = calcCosts(existing as Record<string, unknown>);
   const ai = mockAiAnalysis({ ...existing, ...costs } as Record<string, unknown>);
   const now = new Date();
+  let nextStatus: string;
+  try {
+    nextStatus = assertTransitOrThrow(existing.status as ProductFromStatus, "run_analysis");
+  } catch (err) {
+    res.status(400).json({ error: (err as Error).message });
+    return;
+  }
 
   const historyLog = addHistory(
     (existing.historyLog as unknown[]) || [],
     existing.submitterName,
     "重新分析",
     existing.status,
-    "analyzed_pending_review",
+    nextStatus,
   );
 
   await db
     .update(productsTable)
     .set({
-      status: "analyzed_pending_review",
+      status: nextStatus,
       ...Object.fromEntries(
         Object.entries(costs).map(([k, v]) => [k, v?.toString()]),
       ),
@@ -547,19 +574,26 @@ router.post("/products/:id/submit-screening", async (req, res) => {
   }
 
   const now = new Date();
+  let nextStatus: string;
+  try {
+    nextStatus = assertTransitOrThrow(existing.status as ProductFromStatus, "submit_screening");
+  } catch (err) {
+    res.status(400).json({ error: (err as Error).message });
+    return;
+  }
   const historyLog = addHistory(
     (existing.historyLog as unknown[]) || [],
     body.data.submitterName,
     "提交初筛",
     existing.status,
-    "screening_submitted",
+    nextStatus,
     body.data.employeeNote,
   );
 
   await db
     .update(productsTable)
     .set({
-      status: "screening_submitted",
+      status: nextStatus,
       employeeNote: body.data.employeeNote,
       screeningSubmittedBy: body.data.submitterName,
       screeningSubmittedAt: now,
@@ -603,24 +637,30 @@ router.post("/products/:id/manager-action", async (req, res) => {
   const now = new Date();
   let newStatus: string;
   let actionLabel: string;
+  let transitionAction: ProductAction;
 
   switch (body.data.action) {
     case "approve":
-      newStatus = "pending_sampling";
+      transitionAction = "manager_approve";
       actionLabel = "管理层通过初筛，进入采样阶段";
       break;
     case "reject":
-      // Changed: reject now lands on rejected_unconfirmed (employee must acknowledge)
-      newStatus = "rejected_unconfirmed";
+      transitionAction = "manager_reject";
       actionLabel = "管理层拒绝（待员工确认）";
       break;
     case "return":
-      newStatus = "returned";
+      transitionAction = "manager_return";
       actionLabel = "退回补充";
       break;
     default:
       res.status(400).json({ error: "Invalid action" });
       return;
+  }
+  try {
+    newStatus = assertTransitOrThrow(existing.status as ProductFromStatus, transitionAction);
+  } catch (err) {
+    res.status(400).json({ error: (err as Error).message });
+    return;
   }
 
   const managerHistoryLog = addHistory(
@@ -696,36 +736,37 @@ router.post("/products/:id/sample-action", async (req, res) => {
   const now = new Date();
   let newStatus: string;
   let actionLabel: string;
+  let transitionAction: ProductAction;
   const updates: Record<string, unknown> = {};
 
   switch (action) {
     // ── 采样阶段 ──────────────────────────────────────────────────────────────
     case "start":
       // pending_sampling → sampling: 员工确认采样，联系供应商
-      newStatus = "sampling";
+      transitionAction = "start";
       actionLabel = "确认采样（联系供应商）";
       updates.samplingStartedBy = operatorName;
       updates.samplingStartedAt = now;
       break;
     case "arrive":
       // sampling → sample_arrived: 员工标记样品已到，此前禁止填写评价
-      newStatus = "sample_arrived";
+      transitionAction = "arrive";
       actionLabel = "标记样品已到";
       updates.sampleArrivedAt = now;
       break;
     case "start_review":
       // sample_arrived → sample_reviewing: 员工开始填写验样评价表（持久化，刷新后保留）
-      newStatus = "sample_reviewing";
+      transitionAction = "start_review";
       actionLabel = "开始验样";
       break;
     case "cancel_review":
       // sample_reviewing → sample_arrived: 员工取消填写，退回到"已到样"等待状态
-      newStatus = "sample_arrived";
+      transitionAction = "cancel_review";
       actionLabel = "取消验样（退回）";
       break;
     case "submit":
       // sample_reviewing → sample_reviewed: 员工完成验样并提交评价表
-      newStatus = "sample_reviewed";
+      transitionAction = "submit";
       actionLabel = "提交验样结果";
       updates.sampleConsistentWithImage = data.sampleConsistentWithImage ?? null;
       updates.sampleMaterialEval = data.sampleMaterialEval ?? null;
@@ -738,7 +779,7 @@ router.post("/products/:id/sample-action", async (req, res) => {
     // ── 管理层决策 ────────────────────────────────────────────────────────────
     case "approve_purchase":
       // sample_reviewed → pending_purchase: 管理层同意采购并设定数量
-      newStatus = "pending_purchase";
+      transitionAction = "approve_purchase";
       actionLabel = "管理层同意采购";
       updates.managerComment = data.comment ?? null;
       updates.managerReviewedBy = operatorName;
@@ -747,7 +788,7 @@ router.post("/products/:id/sample-action", async (req, res) => {
       break;
     case "change_supplier": {
       // sample_reviewed → supplier_change_requested: 管理层要求更换供应商（员工确认后进入 supplier_changing）
-      newStatus = "supplier_change_requested";
+      transitionAction = "change_supplier";
       actionLabel = "管理层要求更换供应商（待员工确认）";
       updates.managerComment = data.comment ?? null;
       updates.managerReviewedBy = operatorName;
@@ -797,7 +838,7 @@ router.post("/products/:id/sample-action", async (req, res) => {
     }
     case "abandon":
       // sample_reviewed → rejected_unconfirmed: 管理层放弃，需员工确认知晓后才归档
-      newStatus = "rejected_unconfirmed";
+      transitionAction = "abandon";
       actionLabel = "管理层放弃采购（待员工确认）";
       updates.managerComment = data.comment ?? null;
       updates.managerReviewedBy = operatorName;
@@ -806,43 +847,43 @@ router.post("/products/:id/sample-action", async (req, res) => {
     // ── 采购执行阶段 ──────────────────────────────────────────────────────────
     case "confirm_order":
       // pending_purchase → ordered: 员工确认已向供应商下单
-      newStatus = "ordered";
+      transitionAction = "confirm_order";
       actionLabel = "确认已下单";
       updates.orderedAt = now;
       break;
     case "mark_arrived":
       // ordered → goods_arrived: 员工标记货物已到
-      newStatus = "goods_arrived";
+      transitionAction = "mark_arrived";
       actionLabel = "标记货物已到";
       updates.goodsArrivedAt = now;
       break;
     // ── 验货流程（新流程：goods_arrived → inspecting → 正常/异常分支）─────────────
     case "start_inspection":
       // goods_arrived → inspecting: 员工开始验货
-      newStatus = "inspecting";
+      transitionAction = "start_inspection";
       actionLabel = "开始验货";
       updates.inspectingStartedAt = now;
       break;
     case "start_anomaly_report":
       // inspecting → inspecting_anomaly_entry: 员工选择"发现异常"路径（持久化，刷新后表单保留）
-      newStatus = "inspecting_anomaly_entry";
+      transitionAction = "start_anomaly_report";
       actionLabel = "开始填写异常报告";
       break;
     case "cancel_anomaly_report":
       // inspecting_anomaly_entry → inspecting: 员工取消填写，退回路径选择
-      newStatus = "inspecting";
+      transitionAction = "cancel_anomaly_report";
       actionLabel = "取消异常报告（退回）";
       break;
     case "pass_inspection":
       // inspecting → goods_inspected: 员工确认验货正常
-      newStatus = "goods_inspected";
+      transitionAction = "pass_inspection";
       actionLabel = "验货通过";
       updates.goodsInspectedAt = now;
       updates.goodsInspectionNote = data.goodsInspectionNote ?? null;
       break;
     case "report_anomaly":
       // inspecting → inspection_anomaly: 员工报告异常，填写验货异常表单
-      newStatus = "inspection_anomaly";
+      transitionAction = "report_anomaly";
       actionLabel = "报告验货异常";
       updates.anomalyTypes = data.anomalyTypes ?? null;
       updates.anomalyQuantity = data.anomalyQuantity != null ? Number(data.anomalyQuantity) : null;
@@ -853,7 +894,7 @@ router.post("/products/:id/sample-action", async (req, res) => {
       break;
     case "acknowledge_anomaly":
       // inspection_anomaly → anomaly_handling: 管理层确认异常并选择处理方案
-      newStatus = "anomaly_handling";
+      transitionAction = "acknowledge_anomaly";
       actionLabel = "管理层确认处理方案";
       updates.anomalyHandlingMethod = data.anomalyHandlingMethod ?? null;
       updates.anomalyHandlingNote = data.anomalyHandlingNote ?? null;
@@ -862,20 +903,20 @@ router.post("/products/:id/sample-action", async (req, res) => {
       break;
     case "resolve_anomaly":
       // anomaly_handling → anomaly_resolved: 员工确认异常已处理完毕
-      newStatus = "anomaly_resolved";
+      transitionAction = "resolve_anomaly";
       actionLabel = "确认异常处理完毕";
       updates.anomalyResolvedAt = now;
       updates.anomalyResolvedBy = operatorName;
       break;
     case "accept_goods":
       // anomaly_resolved → completed: 管理层决定接受入库
-      newStatus = "completed";
+      transitionAction = "accept_goods";
       actionLabel = "接受入库（异常处理后）";
       updates.completedAt = now;
       break;
     case "terminate_order":
       // anomaly_resolved → rejected: 管理层决定终止
-      newStatus = "rejected";
+      transitionAction = "terminate_order";
       actionLabel = "终止采购订单";
       updates.managerComment = data.comment ?? null;
       updates.managerReviewedBy = operatorName;
@@ -884,7 +925,7 @@ router.post("/products/:id/sample-action", async (req, res) => {
     // ── MVP 异常采购链路 ──────────────────────────────────────────────────────────
     case "report_exception":
       // goods_arrived | inspecting → exception_reported: 专员上报异常
-      newStatus = "exception_reported";
+      transitionAction = "report_exception";
       actionLabel = "上报采购异常";
       updates.anomalyNote = data.anomalyNote ?? null;
       updates.anomalyReportedAt = now;
@@ -892,7 +933,7 @@ router.post("/products/:id/sample-action", async (req, res) => {
       break;
     case "accept_exception":
       // exception_reported → completed: 经理决定接受现货
-      newStatus = "completed";
+      transitionAction = "accept_exception";
       actionLabel = "经理决策：接受现货入库";
       updates.anomalyHandlingMethod = "accept";
       updates.anomalyHandlingNote = (data.note as string) ?? null;
@@ -902,7 +943,7 @@ router.post("/products/:id/sample-action", async (req, res) => {
       break;
     case "reorder_exception":
       // exception_reported → ordered: 经理要求补发（回到已下单，保留异常记录）
-      newStatus = "ordered";
+      transitionAction = "reorder_exception";
       actionLabel = "经理决策：要求补发";
       updates.anomalyHandlingMethod = "reorder";
       updates.anomalyHandlingNote = (data.note as string) ?? null;
@@ -911,7 +952,7 @@ router.post("/products/:id/sample-action", async (req, res) => {
       break;
     case "terminate_exception":
       // exception_reported → terminated: 经理决定终止采购
-      newStatus = "terminated";
+      transitionAction = "terminate_exception";
       actionLabel = "经理决策：终止采购";
       updates.anomalyHandlingMethod = "terminate";
       updates.anomalyHandlingNote = (data.note as string) ?? null;
@@ -921,14 +962,14 @@ router.post("/products/:id/sample-action", async (req, res) => {
     // ── 兼容旧流程：直接从 goods_arrived 验货（保留向后兼容）────────────────────
     case "inspect":
       // goods_arrived → goods_inspected（旧流程，保留兼容）
-      newStatus = "goods_inspected";
+      transitionAction = "inspect";
       actionLabel = "完成验货（直接）";
       updates.goodsInspectedAt = now;
       updates.goodsInspectionNote = data.goodsInspectionNote ?? null;
       break;
     case "complete":
       // goods_inspected → completed: 员工确认入库完成
-      newStatus = "completed";
+      transitionAction = "complete";
       actionLabel = "入库完成";
       updates.completedAt = now;
       break;
@@ -936,31 +977,19 @@ router.post("/products/:id/sample-action", async (req, res) => {
     // ── 负向决策回流机制（Package 2）──────────────────────────────────────────
     case "acknowledge_rejection":
       // rejected_unconfirmed → rejected: 员工确认知晓拒绝决定
-      if (existing.status !== "rejected_unconfirmed") {
-        res.status(400).json({ error: '只有状态为"拒绝待确认"的产品才能执行此操作' });
-        return;
-      }
-      newStatus = "rejected";
+      transitionAction = "acknowledge_rejection";
       actionLabel = "员工确认知晓拒绝";
       break;
 
     case "acknowledge_supplier_change":
       // supplier_change_requested → supplier_changing: 员工确认并开始换供应商
-      if (existing.status !== "supplier_change_requested") {
-        res.status(400).json({ error: '只有状态为"待确认换供"的产品才能执行此操作' });
-        return;
-      }
-      newStatus = "supplier_changing";
+      transitionAction = "acknowledge_supplier_change";
       actionLabel = "员工确认换供应商，开始更换";
       break;
 
     case "resubmit_supplier":
       // supplier_changing → pending_sampling: 员工完成换供，进入采样
-      if (existing.status !== "supplier_changing") {
-        res.status(400).json({ error: '只有状态为"换供中"的产品才能执行此操作' });
-        return;
-      }
-      newStatus = "pending_sampling";
+      transitionAction = "resubmit_supplier";
       actionLabel = `完成换供应商，进入采样（第${(Number(existing.supplierChangeCount) || 1)}次换供）`;
       if (data.supplierName) updates.supplierName = data.supplierName;
       if (data.link1688) updates.link1688 = data.link1688;
@@ -972,6 +1001,12 @@ router.post("/products/:id/sample-action", async (req, res) => {
     default:
       res.status(400).json({ error: "Invalid action" });
       return;
+  }
+  try {
+    newStatus = assertTransitOrThrow(existing.status as ProductFromStatus, transitionAction);
+  } catch (err) {
+    res.status(400).json({ error: (err as Error).message });
+    return;
   }
 
   // ── 未读提醒时间戳（只在首次进入对应状态时写入，禁止覆盖）──────────────────
@@ -1031,26 +1066,28 @@ router.post("/products/:id/manager-decision", async (req, res) => {
     res.status(404).json({ error: "产品不存在" });
     return;
   }
-  if (product.status !== "sample_reviewed") {
-    res.status(400).json({ error: `当前产品状态为 '${product.status}'，只有 sample_reviewed 状态可发起决策` });
-    return;
-  }
-
   const now = new Date();
 
   if (action === "reject") {
+    let nextStatus: string;
+    try {
+      nextStatus = assertTransitOrThrow(product.status as ProductFromStatus, "manager_decision_reject");
+    } catch (err) {
+      res.status(400).json({ error: (err as Error).message });
+      return;
+    }
     // 经理拒绝验样：进入 rejected_unconfirmed，需员工确认知晓后才归档
     const currentProduct = product; // already fetched above
     const rejHistoryLog = addHistory(
       (currentProduct.historyLog as unknown[]) || [],
       operatorName,
       "经理拒绝验样（待员工确认）",
-      "sample_reviewed",
-      "rejected_unconfirmed",
+      currentProduct.status,
+      nextStatus,
       comment ?? undefined,
     );
     await db.update(productsTable).set({
-      status: "rejected_unconfirmed",
+      status: nextStatus,
       managerComment: comment ?? null,
       managerReviewedBy: operatorName,
       managerReviewedAt: now,
@@ -1071,6 +1108,13 @@ router.post("/products/:id/manager-decision", async (req, res) => {
 
   const parsedSkuQty: Record<string, number> =
     skuQuantities && typeof skuQuantities === "object" ? skuQuantities : {};
+  let nextStatus: string;
+  try {
+    nextStatus = assertTransitOrThrow(product.status as ProductFromStatus, "manager_decision_approve");
+  } catch (err) {
+    res.status(400).json({ error: (err as Error).message });
+    return;
+  }
 
   await db.transaction(async (tx) => {
     // 1. 清零该 SampleOption 下所有 SKU 的 manager_selected 和 purchase_quantity
@@ -1103,7 +1147,7 @@ router.post("/products/:id/manager-decision", async (req, res) => {
     // 4. 更新 Product 状态
     await tx.update(productsTable)
       .set({
-        status: "pending_purchase",
+        status: nextStatus,
         managerComment: comment ?? null,
         managerReviewedBy: operatorName,
         managerReviewedAt: now,
