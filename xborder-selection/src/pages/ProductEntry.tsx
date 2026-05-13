@@ -102,7 +102,7 @@ const fieldLabels: Record<string, string> = {
 export default function ProductEntry() {
   const {
     currentUser, addProduct, updateProduct, products, loading,
-    sampleAction, updateSampleSkuLine, sampleOptions, sampleSkuLines,
+    sampleAction, updateSampleSkuLine, addSampleSkuLine, deleteSampleSkuLine, sampleOptions, sampleSkuLines,
   } = useAppStore();
   const [, setLocation] = useLocation();
   const searchString = useSearch();
@@ -159,21 +159,26 @@ export default function ProductEntry() {
     }
     setNumStr(initialNumStr);
 
-    // In supplier_changing mode: pre-fill SKU rows from existing sampleSkuLines.
+    // In edit mode: pre-fill SKU rows from existing sampleSkuLines.
     // If sampleOptions not yet loaded, bail without marking loaded — effect will
     // re-run when sampleOptions/sampleSkuLines arrive via the dependency array.
-    if (existing.status === 'supplier_changing') {
+    {
       const option = sampleOptions.find(o => o.productId === editId);
-      if (!option) return; // wait for sampleOptions to load
+      if (!option) {
+        // sampleOptions not loaded yet — bail without marking, effect will re-run
+        return;
+      }
       const existingSkus = sampleSkuLines.filter(s => s.sampleOptionId === option.id);
-      setSkuRows(existingSkus.map(sku => ({
-        skuId:        sku.id,
-        imageUrl:     sku.imageUrl  || '',
-        skuName:      sku.skuName   || '',
-        unitPriceStr: sku.unitPrice != null ? String(Number(sku.unitPrice)) : '',
-        moqStr:       sku.moq       != null ? String(sku.moq) : '',
-        notes:        sku.notes     || '',
-      })));
+      if (existingSkus.length > 0) {
+        setSkuRows(existingSkus.map(sku => ({
+          skuId:        sku.id,
+          imageUrl:     sku.imageUrl  || '',
+          skuName:      sku.skuName   || '',
+          unitPriceStr: sku.unitPrice != null ? String(Number(sku.unitPrice)) : '',
+          moqStr:       sku.moq       != null ? String(sku.moq) : '',
+          notes:        sku.notes     || '',
+        })));
+      }
     }
 
     loadedForEditId.current = editId;
@@ -182,6 +187,8 @@ export default function ProductEntry() {
   // Detect if we're in supplier_changing mode (负向决策回流)
   const editProduct = editId ? products.find(p => p.id === editId) : null;
   const isSupplierChangingMode = editProduct?.status === 'supplier_changing';
+  // 草稿/待补充状态下，SKU应完全可编辑（可添加/删除/修改）
+  const isSkuEditable = !editId || isSupplierChangingMode || editProduct?.status === 'draft' || editProduct?.status === 'pending_info';
 
   // ── Edit-mode gate ────────────────────────────────────────────────────────
   // When editId is set but the product data has not yet arrived, we must NOT
@@ -312,9 +319,53 @@ export default function ProductEntry() {
 
     if (editId) {
       setIsSubmitting(true);
-      updateProduct(editId, payload, action === 'analyze' ? '提交AI分析' : (action === 'pending_info' ? '标记待补充' : '保存草稿'))
-        .catch(err => console.error('编辑提交失败:', err))
-        .finally(() => setIsSubmitting(false));
+      try {
+        // 先保存产品基础信息
+        await updateProduct(editId, payload, action === 'analyze' ? '提交AI分析' : (action === 'pending_info' ? '标记待补充' : '保存草稿'));
+
+        // 草稿/待补充状态下，同步SKU变更到数据库
+        if (isSkuEditable) {
+          const option = sampleOptions.find(o => o.productId === editId);
+          if (option) {
+            const existingSkus = sampleSkuLines.filter(s => s.sampleOptionId === option.id);
+            const existingIds = new Set(existingSkus.map(s => s.id));
+
+            // 1. 更新已有SKU
+            for (const row of skuRows) {
+              if (row.skuId && existingIds.has(row.skuId)) {
+                await updateSampleSkuLine(row.skuId, {
+                  skuName: row.skuName.trim() || undefined,
+                  unitPrice: row.unitPriceStr !== '' ? Number(row.unitPriceStr) : undefined,
+                  moq: row.moqStr !== '' ? parseInt(row.moqStr, 10) : undefined,
+                  notes: row.notes.trim() || undefined,
+                });
+                existingIds.delete(row.skuId);
+              }
+            }
+            // 2. 新增没有skuId的行
+            for (const row of skuRows) {
+              if (!row.skuId) {
+                await addSampleSkuLine({
+                  sampleOptionId: option.id,
+                  skuName: row.skuName.trim() || '默认款',
+                  unitPrice: row.unitPriceStr !== '' ? Number(row.unitPriceStr) : form.purchasePrice as number | undefined,
+                  moq: row.moqStr !== '' ? parseInt(row.moqStr, 10) : form.moq as number | undefined,
+                  notes: row.notes.trim() || undefined,
+                  imageUrl: row.imageUrl.trim() || undefined,
+                });
+              }
+            }
+            // 3. 删除已移除的SKU
+            for (const deletedId of existingIds) {
+              await deleteSampleSkuLine(deletedId);
+            }
+          }
+        }
+      } catch (err) {
+        console.error('编辑提交失败:', err);
+      } finally {
+        setIsSubmitting(false);
+      }
       setLocation('/workbench');
     } else {
       if (action === 'analyze') {
@@ -504,21 +555,23 @@ export default function ProductEntry() {
             </div>
           </div>
 
-          {/* ── SKU 明细（新增时）/ SKU 信息更新（换供模式）───── */}
-          {(!editId || isSupplierChangingMode) && (
+          {/* ── SKU 明细（新增/编辑时）───── */}
+          {(true) && (
             <div className={`bg-white rounded-2xl shadow-sm border p-6 ${isSupplierChangingMode ? 'border-amber-200' : 'border-slate-200'}`}>
               <div className="flex items-center justify-between mb-4 pb-2 border-b border-slate-100">
                 <div>
                   <h2 className="text-lg font-bold text-slate-800">
-                    {isSupplierChangingMode ? 'SKU 信息更新' : 'SKU 明细'}
+                    {isSupplierChangingMode ? 'SKU 信息更新' : editId ? 'SKU 明细（已有数据）' : 'SKU 明细'}
                   </h2>
                   <p className="text-xs text-slate-400 mt-0.5">
                     {isSupplierChangingMode
                       ? '请更新各 SKU 的描述、单价、起订量及备注，提交后将覆盖原数据'
-                      : '同一供应商链接下的不同规格（颜色 / 套餐 / 尺寸等）'}
+                      : editId
+                        ? '以下为已有 SKU 数据，如需修改请通过样品管理操作'
+                        : '同一供应商链接下的不同规格（颜色 / 套餐 / 尺寸等）'}
                   </p>
                 </div>
-                {!isSupplierChangingMode && (
+                {isSkuEditable && (
                   <button
                     type="button"
                     onClick={addSkuRow}
@@ -534,6 +587,10 @@ export default function ProductEntry() {
                   <div className="border-2 border-dashed border-amber-200 rounded-xl py-8 text-center text-amber-400 text-sm">
                     正在加载 SKU 数据…
                   </div>
+                ) : editId ? (
+                  <div className="border-2 border-dashed border-slate-200 rounded-xl py-8 text-center text-slate-400 text-sm">
+                    暂无 SKU 数据
+                  </div>
                 ) : (
                   <div className="border-2 border-dashed border-slate-200 rounded-xl py-8 text-center text-slate-400 text-sm">
                     点击"添加 SKU"录入不同规格，不添加则默认按采购单价创建一款 SKU
@@ -545,7 +602,7 @@ export default function ProductEntry() {
                     <div key={row.skuId ?? idx} className="p-4 bg-slate-50 rounded-xl border border-slate-200 space-y-3">
                       <div className="flex items-center justify-between">
                         <span className="text-xs font-semibold text-slate-500">SKU {idx + 1}</span>
-                        {!isSupplierChangingMode && (
+                        {isSkuEditable && (
                           <button
                             type="button"
                             onClick={() => removeSkuRow(idx)}
@@ -557,7 +614,7 @@ export default function ProductEntry() {
                         )}
                       </div>
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                        {!isSupplierChangingMode && (
+                        {isSkuEditable && (
                           <div className="space-y-1">
                             <label className="text-xs font-semibold text-slate-600 flex items-center gap-1">
                               <ImageIcon size={11} className="text-slate-400" /> SKU 图片 URL
@@ -573,45 +630,61 @@ export default function ProductEntry() {
                         )}
                         <div className="space-y-1">
                           <label className="text-xs font-semibold text-slate-600">SKU 描述</label>
-                          <input
-                            type="text"
-                            value={row.skuName}
-                            onChange={e => handleSkuChange(idx, 'skuName', e.target.value)}
-                            placeholder="如：红色款、USB-C版"
-                            className="w-full px-3 py-2 text-sm rounded-lg border border-slate-300 focus:border-primary focus:ring-2 focus:ring-primary/20"
-                          />
+                          {isSkuEditable ? (
+                            <input
+                              type="text"
+                              value={row.skuName}
+                              onChange={e => handleSkuChange(idx, 'skuName', e.target.value)}
+                              placeholder="如：红色款、USB-C版"
+                              className="w-full px-3 py-2 text-sm rounded-lg border border-slate-300 focus:border-primary focus:ring-2 focus:ring-primary/20"
+                            />
+                          ) : (
+                            <span className="block px-3 py-2 text-sm text-slate-700">{row.skuName || '—'}</span>
+                          )}
                         </div>
                         <div className="space-y-1">
                           <label className="text-xs font-semibold text-slate-600">单价 (RMB)</label>
-                          <input
-                            type="text"
-                            inputMode="decimal"
-                            value={row.unitPriceStr}
-                            onChange={e => handleSkuChange(idx, 'unitPriceStr', e.target.value)}
-                            placeholder={form.purchasePrice ? `默认 ¥${form.purchasePrice}` : '0.00'}
-                            className="w-full px-3 py-2 text-sm rounded-lg border border-slate-300 focus:border-primary focus:ring-2 focus:ring-primary/20"
-                          />
+                          {isSkuEditable ? (
+                            <input
+                              type="text"
+                              inputMode="decimal"
+                              value={row.unitPriceStr}
+                              onChange={e => handleSkuChange(idx, 'unitPriceStr', e.target.value)}
+                              placeholder={form.purchasePrice ? `默认 ¥${form.purchasePrice}` : '0.00'}
+                              className="w-full px-3 py-2 text-sm rounded-lg border border-slate-300 focus:border-primary focus:ring-2 focus:ring-primary/20"
+                            />
+                          ) : (
+                            <span className="block px-3 py-2 text-sm text-slate-700">{row.unitPriceStr ? `¥${row.unitPriceStr}` : '—'}</span>
+                          )}
                         </div>
                         <div className="space-y-1">
                           <label className="text-xs font-semibold text-slate-600">起订量 (MOQ)</label>
-                          <input
-                            type="text"
-                            inputMode="numeric"
-                            value={row.moqStr}
-                            onChange={e => handleSkuChange(idx, 'moqStr', e.target.value)}
-                            placeholder="件数"
-                            className="w-full px-3 py-2 text-sm rounded-lg border border-slate-300 focus:border-primary focus:ring-2 focus:ring-primary/20"
-                          />
+                          {isSkuEditable ? (
+                            <input
+                              type="text"
+                              inputMode="numeric"
+                              value={row.moqStr}
+                              onChange={e => handleSkuChange(idx, 'moqStr', e.target.value)}
+                              placeholder="件数"
+                              className="w-full px-3 py-2 text-sm rounded-lg border border-slate-300 focus:border-primary focus:ring-2 focus:ring-primary/20"
+                            />
+                          ) : (
+                            <span className="block px-3 py-2 text-sm text-slate-700">{row.moqStr || '—'}</span>
+                          )}
                         </div>
                         <div className={`space-y-1 ${isSupplierChangingMode ? '' : 'sm:col-span-2'}`}>
                           <label className="text-xs font-semibold text-slate-600">备注</label>
-                          <input
-                            type="text"
-                            value={row.notes}
-                            onChange={e => handleSkuChange(idx, 'notes', e.target.value)}
-                            placeholder="可选"
-                            className="w-full px-3 py-2 text-sm rounded-lg border border-slate-300 focus:border-primary focus:ring-2 focus:ring-primary/20"
-                          />
+                          {isSkuEditable ? (
+                            <input
+                              type="text"
+                              value={row.notes}
+                              onChange={e => handleSkuChange(idx, 'notes', e.target.value)}
+                              placeholder="可选"
+                              className="w-full px-3 py-2 text-sm rounded-lg border border-slate-300 focus:border-primary focus:ring-2 focus:ring-primary/20"
+                            />
+                          ) : (
+                            <span className="block px-3 py-2 text-sm text-slate-700">{row.notes || '—'}</span>
+                          )}
                         </div>
                       </div>
                     </div>

@@ -33,6 +33,8 @@ export interface SampleOption {
   sampleReviewedAt?: string | null;
   samplingStartedBy?: string | null;
   samplingStartedAt?: string | null;
+  sampleOrderStatus?: string | null;
+  sampleOrderedAt?: string | null;
   sampleArrivedAt?: string | null;
   selectionNote?: string | null;
   selectedBy?: string | null;
@@ -78,12 +80,15 @@ interface StoreState {
   updatePurchaseOrder: (id: string, updates: Partial<PurchaseOrder>) => void;
   addSampleOption: (option: Partial<SampleOption>) => Promise<SampleOption>;
   updateSampleOption: (id: string, updates: Partial<SampleOption>) => Promise<SampleOption>;
+  updateSampleOptionStatus: (id: string, sampleOrderStatus: string) => Promise<SampleOption>;
+  deleteSampleOption: (id: string) => Promise<void>;
   addSampleSkuLine: (sku: Partial<SampleSkuLine>) => Promise<SampleSkuLine>;
   updateSampleSkuLine: (id: string, updates: Partial<SampleSkuLine>) => Promise<SampleSkuLine>;
   deleteSampleSkuLine: (id: string) => Promise<void>;
   managerDecision: (productId: string, payload: {
     action: 'approve' | 'reject';
-    selectedOptionId?: string;
+    selectedOptionId?: string;        // 保留向后兼容
+    selectedOptionIds?: string[];     // 新增：多方案
     selectedSkuIds?: string[];
     skuQuantities?: Record<string, number>;
     comment?: string;
@@ -376,6 +381,21 @@ export function StoreProvider({
     return updated;
   };
 
+  const updateSampleOptionStatus = async (id: string, sampleOrderStatus: string): Promise<SampleOption> => {
+    const updated = await apiFetch(`${API}/sample-options/${id}/status`, {
+      method: 'PATCH',
+      body: JSON.stringify({ sampleOrderStatus }),
+    });
+    setSampleOptions(prev => prev.map(o => o.id === id ? updated : o));
+    return updated;
+  };
+
+  const deleteSampleOption = async (id: string): Promise<void> => {
+    await apiFetch(`${API}/sample-options/${id}`, { method: 'DELETE' });
+    setSampleOptions(prev => prev.filter(o => o.id !== id));
+    setSampleSkuLines(prev => prev.filter(s => s.sampleOptionId !== id));
+  };
+
   const addSampleSkuLine = async (sku: Partial<SampleSkuLine>): Promise<SampleSkuLine> => {
     const created = await apiFetch(`${API}/sample-sku-lines`, {
       method: 'POST',
@@ -422,7 +442,7 @@ export function StoreProvider({
         role, currentUser, products, purchaseOrders, sampleOptions, sampleSkuLines, loading,
         logout, addProduct, updateProduct, sampleAction,
         addPurchaseOrder, updatePurchaseOrderStatus, updatePurchaseOrder,
-        addSampleOption, updateSampleOption,
+        addSampleOption, updateSampleOption, updateSampleOptionStatus, deleteSampleOption,
         addSampleSkuLine, updateSampleSkuLine, deleteSampleSkuLine,
         managerDecision,
         refetch,

@@ -73,4 +73,52 @@ router.get("/storage/objects/*objectPath", async (req, res) => {
   }
 });
 
+
+
+// 1688图片代理 — 公开访问，不需要JWT认证
+router.get("/image-proxy", async (req, res) => {
+  const { url } = req.query as { url?: string };
+  if (!url) {
+    res.status(400).json({ error: "url parameter required" });
+    return;
+  }
+
+  try {
+    const targetUrl = new URL(url);
+    // 只允许代理1688和alicdn域名的图片
+    if (!targetUrl.hostname.includes("1688.com") && !targetUrl.hostname.includes("alicdn.com")) {
+      res.status(403).json({ error: "Only 1688 images are allowed" });
+      return;
+    }
+
+    const response = await fetch(url, {
+      headers: {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "Referer": "https://detail.1688.com/",
+      },
+    });
+
+    if (!response.ok) {
+      res.status(response.status).json({ error: "Failed to fetch image" });
+      return;
+    }
+
+    const contentType = response.headers.get("content-type") || "image/jpeg";
+    res.setHeader("Content-Type", contentType);
+    res.setHeader("Cache-Control", "public, max-age=3600");
+    const { Readable } = await import("stream");
+    const nodeStream = response.body ? Readable.fromWeb(response.body as any) : null;
+    if (nodeStream) {
+      nodeStream.pipe(res);
+    } else {
+      res.status(500).json({ error: "No response body" });
+    }
+  } catch (err) {
+    console.error("Image proxy error:", err);
+    if (!res.headersSent) {
+      res.status(500).json({ error: "Failed to proxy image" });
+    }
+  }
+});
+
 export default router;

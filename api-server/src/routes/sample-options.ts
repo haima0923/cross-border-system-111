@@ -1,6 +1,6 @@
 import { Router, type IRouter } from "express";
 import { db } from "@workspace/db";
-import { sampleOptionsTable } from "@workspace/db/schema";
+import { sampleOptionsTable, sampleSkuLinesTable } from "@workspace/db/schema";
 import { eq } from "drizzle-orm";
 import { randomUUID } from "crypto";
 
@@ -101,6 +101,45 @@ router.put("/sample-options/:id", async (req, res) => {
   await db.update(sampleOptionsTable).set(updates as any).where(eq(sampleOptionsTable.id, id));
   const [updated] = await db.select().from(sampleOptionsTable).where(eq(sampleOptionsTable.id, id));
   if (!updated) { res.status(404).json({ error: "Not found" }); return; }
+  res.json(serializeSampleOption(updated as Record<string, unknown>));
+});
+
+router.delete("/sample-options/:id", async (req, res) => {
+  const { id } = req.params;
+
+  const [existing] = await db.select().from(sampleOptionsTable).where(eq(sampleOptionsTable.id, id));
+  if (!existing) {
+    res.status(404).json({ error: "Sample option not found" });
+    return;
+  }
+
+  // 级联删除：先删该方案下所有SKU行，再删方案本身
+  await db.delete(sampleSkuLinesTable).where(eq(sampleSkuLinesTable.sampleOptionId, id));
+  await db.delete(sampleOptionsTable).where(eq(sampleOptionsTable.id, id));
+
+  res.json({ ok: true });
+});
+
+// 图片代理路由 - 用于解决跨域问题和CORS限制
+router.patch("/sample-options/:id/status", async (req, res) => {
+  const { id } = req.params;
+  const { sampleOrderStatus } = req.body;
+
+  if (!sampleOrderStatus) {
+    res.status(400).json({ error: "sampleOrderStatus required" });
+    return;
+  }
+
+  const now = new Date();
+  await db.update(sampleOptionsTable)
+    .set({ sampleOrderStatus, updatedAt: now })
+    .where(eq(sampleOptionsTable.id, id));
+
+  const [updated] = await db.select().from(sampleOptionsTable).where(eq(sampleOptionsTable.id, id));
+  if (!updated) {
+    res.status(404).json({ error: "Not found" });
+    return;
+  }
   res.json(serializeSampleOption(updated as Record<string, unknown>));
 });
 

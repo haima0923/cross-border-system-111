@@ -39,11 +39,11 @@ const STATUS_CONFIG: Record<SamplingStatus, {
     btnPrimary: true,
   },
   sampling_ready: {
-    label: '待验样',
+    label: '验样中',
     bg: 'bg-purple-100',
     text: 'text-purple-700',
     dot: 'bg-purple-400',
-    btnText: '进行验样',
+    btnText: '填写评价',
     btnPrimary: true,
   },
   sampling_review_submitted: {
@@ -69,6 +69,7 @@ const ORDER_STATUS_CONFIG: Record<string, { label: string; bg: string; text: str
   pending:  { label: '待采购', bg: 'bg-slate-100', text: 'text-slate-600' },
   ordered:  { label: '已采购', bg: 'bg-blue-100',  text: 'text-blue-700' },
   arrived:  { label: '已到货', bg: 'bg-green-100', text: 'text-green-700' },
+  inspected:{ label: '已验样', bg: 'bg-purple-100',text: 'text-purple-700' },
 };
 
 function ProductCard({
@@ -268,4 +269,3 @@ export default function SampleManagement() {
     </div>
   );
 }
-// test marker

@@ -23,10 +23,10 @@ const ORDER_STATUS_CONFIG: Record<string, { label: string; bg: string; text: str
   pending:  { label: '待采购', bg: 'bg-slate-100', text: 'text-slate-600' },
   ordered:  { label: '已采购', bg: 'bg-blue-100',  text: 'text-blue-700' },
   arrived:  { label: '已到货', bg: 'bg-green-100', text: 'text-green-700' },
-  
+  inspected:{ label: '已验样', bg: 'bg-purple-100',text: 'text-purple-700' },
 };
 
-const ORDER_STATUS_FLOW = ['pending', 'ordered', 'arrived'] as const;
+const ORDER_STATUS_FLOW = ['pending', 'ordered', 'arrived', 'inspected'] as const;
 
 function fmt(dateStr?: string | null) {
   if (!dateStr) return '—';
@@ -150,7 +150,6 @@ export default function SamplingDetail() {
   const [newSkuPrice, setNewSkuPrice] = useState('');
   const [newSkuMoq, setNewSkuMoq] = useState('');
   const [newSkuNotes, setNewSkuNotes] = useState('');
-  const [newSkuImageUrl, setNewSkuImageUrl] = useState('');
 
   // Status change confirmation
   const [statusConfirm, setStatusConfirm] = useState<{ optionId: string; status: string } | null>(null);
@@ -206,11 +205,10 @@ export default function SamplingDetail() {
     navTimerRef.current = setTimeout(() => setLocation(dest), delay);
   };
 
-
   // Count options by status
   const arrivedCount = myOptions.filter(o => {
     const os = o.sampleOrderStatus || 'pending';
-    return os === 'arrived';
+    return os === 'arrived' || os === 'inspected';
   }).length;
   const allArrived = myOptions.length >= 3 && arrivedCount === myOptions.length;
 
@@ -223,34 +221,36 @@ export default function SamplingDetail() {
 
   // Bug 2 修复：计算提交按钮的条件和提示文案
   const needMoreOptions = Math.max(0, 3 - myOptions.length);
-  const canSubmitReady = myOptions.length >= 3 && allArrived && status === "sampling_collection";
-  const submitReadyTooltip = !canSubmitReady
-    ? (needMoreOptions > 0 ? `还需添加${needMoreOptions}个方案` : "等待所有方案到货")
-    : "";
+  const submitReadyTooltip = !canSubmitReady 
+    ? (needMoreOptions > 0 ? `还需添加${needMoreOptions}个方案` : '等待所有方案到货')
+    : '';
+
+  const canSubmitReady = myOptions.length >= 3 && allArrived && status === 'sampling_collection';
   const canSubmitReview = status === 'sampling_ready' && allEvalsFilled;
 
   // ── Handlers ──────────────────────────────────────────────────────────────
 
   const handleAddOption = async () => {
-    if (!newOptionLabel.trim() || !newOptionSupplier.trim() || !newOptionLink.trim()) return;
+    if (!newOptionLabel.trim()) return;
     setAddingOption(true);
     try {
       await addSampleOption({
         productId: id,
         optionLabel: newOptionLabel.trim(),
-        supplierName: newOptionSupplier.trim(),
-        link1688: newOptionLink.trim(),
+        supplierName: newOptionSupplier.trim() || null,
+        link1688: newOptionLink.trim() || null,
         sampleOrderStatus: 'pending',
       });
       setNewOptionLabel('');
       setNewOptionSupplier('');
+      setNewOptionLink('');
       setShowAddOption(false);
     } catch (err) {
       alert('添加方案失败，请重试');
     } finally {
       setAddingOption(false);
     }
-  }
+  };
 
   const handleDeleteOption = async (optId: string) => {
     if (!confirm('确定删除此方案？关联的SKU也会一并删除。')) return;
@@ -283,7 +283,7 @@ export default function SamplingDetail() {
   };
 
   const handleAddSku = async (optionId: string) => {
-    if (!newSkuName.trim() || !newSkuPrice.trim() || !newSkuMoq.trim() || !newSkuImageUrl.trim()) return;
+    if (!newSkuName.trim()) return;
     try {
       await addSampleSkuLine({
         sampleOptionId: optionId,
@@ -291,13 +291,11 @@ export default function SamplingDetail() {
         unitPrice: newSkuPrice ? Number(newSkuPrice) : null,
         moq: newSkuMoq ? Number(newSkuMoq) : null,
         notes: newSkuNotes.trim() || null,
-        imageUrl: newSkuImageUrl.trim() || null,
       });
       setNewSkuName('');
       setNewSkuPrice('');
       setNewSkuMoq('');
       setNewSkuNotes('');
-      setNewSkuImageUrl('');
       setAddingSkuToOption(null);
     } catch (err) {
       alert('添加SKU失败，请重试');
@@ -318,7 +316,6 @@ export default function SamplingDetail() {
         });
       }
     }
-    navTo(backPath);
   };
 
   const handleSubmitReady = async () => {
@@ -348,11 +345,11 @@ export default function SamplingDetail() {
             sampleWorkmanshipEval: ev.sampleWorkmanshipEval || null,
             sampleFunctionEval: ev.sampleFunctionEval || null,
             sampleRemarks: ev.sampleRemarks || null,
-            sampleOrderStatus: 'arrived',
+            sampleOrderStatus: 'inspected',
           });
         }
       }
-      await sampleAction(id, 'submit_sampling_review', {
+      await sampleAction(id, 'submit', {
         sampleConsistentWithImage: true,
         sampleMaterialEval: '已评价',
         sampleWorkmanshipEval: '已评价',
@@ -472,7 +469,7 @@ export default function SamplingDetail() {
                   )}
                 </div>
 
-                {!isReadOnly && myOptions.length > 1 && opt.optionLabel !== "初始方案" && (
+                {!isReadOnly && myOptions.length > 1 && (
                   <button
                     onClick={() => handleDeleteOption(opt.id)}
                     className="text-slate-400 hover:text-red-500 transition-colors p-1"
@@ -502,7 +499,7 @@ export default function SamplingDetail() {
               <div className="mb-4">
                 <div className="flex items-center justify-between mb-2">
                   <h4 className="text-sm font-medium text-slate-700">SKU 列表</h4>
-                  {!isReadOnly && opt.optionLabel !== "初始方案" && (
+                  {!isReadOnly && (
                     <button
                       onClick={() => {
                         setAddingSkuToOption(addingSkuToOption === opt.id ? null : opt.id);
@@ -510,7 +507,6 @@ export default function SamplingDetail() {
                         setNewSkuPrice('');
                         setNewSkuMoq('');
                         setNewSkuNotes('');
-                        setNewSkuImageUrl('');
                       }}
                       className="text-xs text-primary hover:text-primary/80 font-medium flex items-center gap-1"
                     >
@@ -524,25 +520,16 @@ export default function SamplingDetail() {
                     <table className="w-full text-xs">
                       <thead>
                         <tr className="bg-slate-50 text-slate-500">
-                          <th className="px-3 py-2 w-10" /><th className="px-3 py-2 text-left font-medium">SKU名称</th>
+                          <th className="px-3 py-2 text-left font-medium">SKU名称</th>
                           <th className="px-3 py-2 text-right font-medium">单价</th>
                           <th className="px-3 py-2 text-right font-medium">MOQ</th>
                           <th className="px-3 py-2 text-left font-medium">备注</th>
-                          {!isReadOnly && opt.optionLabel !== "初始方案" && <th className="px-3 py-2 w-8" />}
+                          {!isReadOnly && <th className="px-3 py-2 w-8" />}
                         </tr>
                       </thead>
                       <tbody>
                         {optSkus.map(sku => (
                           <tr key={sku.id} className="border-t border-slate-100">
-                            <td className="px-3 py-2">
-                              <ProductImage
-                                hostedImageUrl={sku.hostedImageUrl}
-                                imageUrl={sku.imageUrl}
-                                size="sm"
-                                alt={sku.skuName || 'SKU'}
-                                withHover={true}
-                              />
-                            </td>
                             <td className="px-3 py-2 font-medium text-slate-800">
                               {sku.skuName || '—'}
                             </td>
@@ -555,7 +542,7 @@ export default function SamplingDetail() {
                             <td className="px-3 py-2 text-slate-500 max-w-[160px] truncate">
                               {sku.notes || '-'}
                             </td>
-                            {!isReadOnly && opt.optionLabel !== "初始方案" && (
+                            {!isReadOnly && (
                               <td className="px-3 py-2">
                                 <button
                                   onClick={() => deleteSampleSkuLine(sku.id)}
@@ -589,14 +576,14 @@ export default function SamplingDetail() {
                       <input
                         value={newSkuPrice}
                         onChange={e => setNewSkuPrice(e.target.value)}
-                        placeholder="单价 *"
+                        placeholder="单价"
                         type="number"
                         className="text-sm border border-slate-200 rounded-lg px-3 py-1.5 focus:outline-none focus:ring-1 focus:ring-primary/50"
                       />
                       <input
                         value={newSkuMoq}
                         onChange={e => setNewSkuMoq(e.target.value)}
-                        placeholder="MOQ *"
+                        placeholder="MOQ"
                         type="number"
                         className="text-sm border border-slate-200 rounded-lg px-3 py-1.5 focus:outline-none focus:ring-1 focus:ring-primary/50"
                       />
@@ -606,17 +593,11 @@ export default function SamplingDetail() {
                         placeholder="备注"
                         className="text-sm border border-slate-200 rounded-lg px-3 py-1.5 focus:outline-none focus:ring-1 focus:ring-primary/50"
                       />
-                      <input
-                        value={newSkuImageUrl}
-                        onChange={e => setNewSkuImageUrl(e.target.value)}
-                        placeholder="图片链接 *"
-                        className="col-span-2 text-sm border border-slate-200 rounded-lg px-3 py-1.5 focus:outline-none focus:ring-1 focus:ring-primary/50"
-                      />
                     </div>
                     <div className="flex gap-2">
                       <button
                         onClick={() => handleAddSku(opt.id)}
-                        disabled={!newSkuName.trim() || !newSkuPrice.trim() || !newSkuMoq.trim() || !newSkuImageUrl.trim()}
+                        disabled={!newSkuName.trim()}
                         className="text-xs bg-primary text-white px-3 py-1.5 rounded-lg hover:bg-primary/90 disabled:opacity-40"
                       >
                         确认添加
@@ -738,20 +719,20 @@ export default function SamplingDetail() {
                   <input
                     value={newOptionSupplier}
                     onChange={e => setNewOptionSupplier(e.target.value)}
-                    placeholder="供应商名称 *"
+                    placeholder="供应商名称"
                     className="text-sm border border-slate-200 rounded-xl px-3 py-2 focus:outline-none focus:ring-1 focus:ring-primary/50"
                   />
                   <input
                     value={newOptionLink}
                     onChange={e => setNewOptionLink(e.target.value)}
-                    placeholder="1688采购链接 *"
+                    placeholder="1688采购链接"
                     className="text-sm border border-slate-200 rounded-xl px-3 py-2 focus:outline-none focus:ring-1 focus:ring-primary/50"
                   />
                 </div>
                 <div className="flex gap-2">
                   <button
                     onClick={handleAddOption}
-                    disabled={!newOptionLabel.trim() || !newOptionSupplier.trim() || !newOptionLink.trim() || addingOption}
+                    disabled={!newOptionLabel.trim() || addingOption}
                     className="text-sm bg-primary text-white px-4 py-2 rounded-xl hover:bg-primary/90 disabled:opacity-40 font-medium"
                   >
                     {addingOption ? '添加中...' : '确认添加'}
@@ -807,28 +788,26 @@ export default function SamplingDetail() {
                   <Save size={14} /> 保存草稿
                 </button>
               )}
-              {status === 'sampling_collection' && (
-                <button
-                  onClick={handleSubmitReady}
-                  disabled={!canSubmitReady || submittingReady}
-                  title={submitReadyTooltip}
-                  className="text-sm bg-primary text-white px-5 py-2.5 rounded-xl hover:bg-primary/90 disabled:bg-slate-400 disabled:cursor-not-allowed font-medium flex items-center gap-1.5 transition-colors"
-                >
-                  <Send size={14} />
-                  {submittingReady ? '提交中...' : (needMoreOptions > 0 ? `开始验样(还需${needMoreOptions}个方案)` : (!allArrived ? '开始验样(等待全部到货)' : '开始验样'))}
-                </button>
-              )}
-              {status === 'sampling_ready' && (
-                <button
-                  onClick={handleSubmitReview}
-                  disabled={!canSubmitReview || submittingReview}
-                  title={!canSubmitReview ? '请完成所有方案的评价' : ''}
-                  className="text-sm bg-primary text-white px-5 py-2.5 rounded-xl hover:bg-primary/90 disabled:bg-slate-400 disabled:cursor-not-allowed font-medium flex items-center gap-1.5 transition-colors"
-                >
-                  <Send size={14} />
-                  {submittingReview ? '提交中...' : '提交验样结果'}
-                </button>
-              )}
+              {/* Bug 2 修复：提交验样按钮始终显示，文案根据条件变化 */}
+              <button
+                onClick={handleSubmitReady}
+                disabled={!canSubmitReady || submittingReady}
+                title={submitReadyTooltip}
+                className="text-sm bg-primary text-white px-5 py-2.5 rounded-xl hover:bg-primary/90 disabled:bg-slate-400 disabled:cursor-not-allowed font-medium flex items-center gap-1.5 transition-colors"
+              >
+                <Send size={14} />
+                {submittingReady ? '提交中...' : (needMoreOptions > 0 ? `开始验样(还需${needMoreOptions}个方案)` : (!allArrived ? '开始验样(等待全部到货)' : '开始验样'))}
+              </button>
+              {/* Bug 2 修复：提交验样结果按钮始终显示 */}
+              <button
+                onClick={handleSubmitReview}
+                disabled={!canSubmitReview || submittingReview}
+                title={!canSubmitReview ? '请完成所有方案的评价' : ''}
+                className="text-sm bg-primary text-white px-5 py-2.5 rounded-xl hover:bg-primary/90 disabled:bg-slate-400 disabled:cursor-not-allowed font-medium flex items-center gap-1.5 transition-colors"
+              >
+                <Send size={14} />
+                {submittingReview ? '提交中...' : '提交验样结果'}
+              </button>
             </div>
           </div>
         </div>
@@ -865,4 +844,3 @@ export default function SamplingDetail() {
     </div>
   );
 }
-

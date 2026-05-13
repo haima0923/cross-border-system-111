@@ -15,7 +15,7 @@ export const STATUS_MAP: Record<string, { label: string; color: string }> = {
   manager_reviewing: { label: '管理审核中', color: 'bg-yellow-100 text-yellow-800 border-yellow-200' },
   pending_sampling: { label: '待采样',  color: 'bg-cyan-100 text-cyan-700 border-cyan-200' },
   sampling_collection: { label: '采样建档', color: 'bg-cyan-200 text-cyan-800 border-cyan-300' },
-  sampling_ready:     { label: '待验样', color: 'bg-teal-100 text-teal-700 border-teal-200' },
+  sampling_ready:     { label: '方案就绪', color: 'bg-teal-100 text-teal-700 border-teal-200' },
   sampling:         { label: '采样中',  color: 'bg-sky-100 text-sky-700 border-sky-200' },
   sample_arrived:   { label: '已到样',  color: 'bg-teal-100 text-teal-700 border-teal-200' },
   sample_reviewing: { label: '验样中',  color: 'bg-teal-200 text-teal-800 border-teal-300' },

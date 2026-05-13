@@ -25,7 +25,9 @@ export function ProductImage({
   alt = '',
   withHover = true,
 }: ProductImageProps) {
-  const primarySrc  = hostedImageUrl || null;
+  // 优先使用hostedImageUrl（GCS代理），其次用image-proxy中转原始URL，最后直接用原始URL
+  const proxyUrl = imageUrl ? `/api/image-proxy?url=${encodeURIComponent(imageUrl)}` : null;
+  const primarySrc  = hostedImageUrl || proxyUrl || null;
   const fallbackSrc = imageUrl || null;
 
   const [src, setSrc]             = useState<string | null>(primarySrc ?? fallbackSrc);
@@ -37,7 +39,8 @@ export function ProductImage({
   const [popover, setPopover]     = useState<{ x: number; y: number } | null>(null);
 
   useEffect(() => {
-    const next = (hostedImageUrl || null) ?? (imageUrl || null);
+    const pUrl = imageUrl ? `/api/image-proxy?url=${encodeURIComponent(imageUrl)}` : null;
+    const next = (hostedImageUrl || null) ?? pUrl ?? (imageUrl || null);
     setSrc(next);
     setTriedPrimary(false);
     setFailed(false);

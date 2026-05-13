@@ -27,7 +27,7 @@ router.get("/sample-sku-lines", async (req, res) => {
 router.post("/sample-sku-lines", async (req, res) => {
   const now = new Date();
   const { sampleOptionId, skuName, attributes, unitPrice, moq, weight, dimensions,
-          imageUrl, recommended, notes } = req.body;
+          imageUrl, recommended, purchaseQuantity, notes } = req.body;
 
   if (!sampleOptionId) { res.status(400).json({ error: "sampleOptionId required" }); return; }
 
@@ -43,6 +43,7 @@ router.post("/sample-sku-lines", async (req, res) => {
     dimensions: dimensions || null,
     imageUrl: imageUrl || null,
     recommended: recommended ?? false,
+    purchaseQuantity: purchaseQuantity != null ? Number(purchaseQuantity) : null,
     notes: notes || null,
     createdAt: now,
     updatedAt: now,
@@ -56,7 +57,7 @@ router.put("/sample-sku-lines/:id", async (req, res) => {
   const now = new Date();
   const { id } = req.params;
   const { skuName, attributes, unitPrice, moq, weight, dimensions,
-          imageUrl, recommended, managerSelected, notes } = req.body;
+          imageUrl, recommended, managerSelected, purchaseQuantity, notes } = req.body;
 
   const updates: Record<string, unknown> = { updatedAt: now };
   if (skuName !== undefined) updates.skuName = skuName;
@@ -68,6 +69,7 @@ router.put("/sample-sku-lines/:id", async (req, res) => {
   if (imageUrl !== undefined) updates.imageUrl = imageUrl;
   if (recommended !== undefined) updates.recommended = recommended;
   if (managerSelected !== undefined) updates.managerSelected = managerSelected;
+  if (purchaseQuantity !== undefined) updates.purchaseQuantity = purchaseQuantity != null ? Number(purchaseQuantity) : null;
   if (notes !== undefined) updates.notes = notes;
 
   await db.update(sampleSkuLinesTable).set(updates as any).where(eq(sampleSkuLinesTable.id, id));

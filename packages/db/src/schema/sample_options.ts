@@ -23,6 +23,8 @@ export const sampleOptionsTable = pgTable("sample_options", {
   sampleReviewedAt: timestamp("sample_reviewed_at"),
   samplingStartedBy: text("sampling_started_by"),
   samplingStartedAt: timestamp("sampling_started_at"),
+  sampleOrderStatus: text("sample_order_status").notNull().default("pending"),
+  sampleOrderedAt: timestamp("sample_ordered_at"),
   sampleArrivedAt: timestamp("sample_arrived_at"),
   selectionNote: text("selection_note"),
   selectedBy: text("selected_by"),

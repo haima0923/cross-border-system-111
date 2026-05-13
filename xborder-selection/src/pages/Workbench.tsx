@@ -9,7 +9,7 @@ import { ProductImage } from '@/components/shared/ProductImage';
 // ── Routing constants (determines which detail page a card links to) ──────────
 const ENTRY_STATUSES = ['draft', 'pending_info', 'returned', 'supplier_changing'];
 const SAMPLING_ROUTE_STATUSES = [
-  'pending_sampling', 'sampling', 'sample_arrived', 'sample_reviewing', 'sample_reviewed',
+  'pending_sampling', 'sampling_collection', 'sampling_ready', 'sampling', 'sample_arrived', 'sample_reviewing', 'sampling_review_submitted', 'sample_reviewed',
 ];
 
 function getCardPath(status: string, id: string): string {
@@ -42,7 +42,7 @@ const MAIN_GROUPS = [
   {
     id: 'review',
     title: '审核状态',
-    statuses: ['screening_submitted', 'pending_sampling'],
+    statuses: ['screening_submitted', 'pending_sampling', 'sampling_collection', 'sampling_ready'],
     color: 'border-emerald-200 bg-emerald-50/30',
     headerColor: 'text-emerald-700',
     dotColor: 'bg-emerald-400',
@@ -52,7 +52,7 @@ const MAIN_GROUPS = [
     id: 'sampling',
     title: '采样',
     statuses: [
-      'sampling', 'sample_arrived', 'sample_reviewing', 'sample_reviewed',
+      'sampling', 'sample_arrived', 'sample_reviewing', 'sampling_review_submitted', 'sample_reviewed',
     ],
     color: 'border-cyan-200 bg-cyan-50/30',
     headerColor: 'text-cyan-700',

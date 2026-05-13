@@ -153,9 +153,9 @@ function Funnel({ data }: { data: { label: string; value: number; base?: number;
     <div className="space-y-2">
       {data.map((step, i) => {
         const w = Math.max(10, (step.value / max) * 100);
-        const convRate = i > 0 && data[i - 1].value
-          ? (step.value / data[i - 1].value * 100).toFixed(1)
-          : null;
+        const rawRate = i > 0 && data[i - 1].value ? step.value / data[i - 1].value * 100 : null;
+        const convRate = rawRate !== null ? rawRate.toFixed(1) : null;
+        const isAnomalous = rawRate !== null && rawRate > 100;
         return (
           <div key={step.label} className="flex items-center gap-3">
             <div className="w-28 shrink-0 text-xs text-right text-slate-500">{step.label}</div>
@@ -171,7 +171,7 @@ function Funnel({ data }: { data: { label: string; value: number; base?: number;
               {convRate !== null ? (
                 <>
                   <ArrowRight size={10} className="shrink-0" />
-                  {convRate}%
+                  <span className={isAnomalous ? "text-amber-500" : ""}>{isAnomalous ? "⚠ " : ""}{convRate}%</span>
                 </>
               ) : null}
               {step.tip && <MetricTip text={step.tip} />}

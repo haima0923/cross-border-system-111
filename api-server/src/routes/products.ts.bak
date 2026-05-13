@@ -741,36 +741,12 @@ router.post("/products/:id/sample-action", async (req, res) => {
 
   switch (action) {
     // ── 采样阶段 ──────────────────────────────────────────────────────────────
-    case "start_sampling_collection":
-      // pending_sampling → sampling_collection: 员工开始采样建档（多方案模式）
-      transitionAction = "start_sampling_collection";
-      actionLabel = "开始采样建档";
-      updates.samplingStartedBy = operatorName;
-      updates.samplingStartedAt = now;
-      break;
     case "start":
-      // pending_sampling → sampling: 员工确认采样，联系供应商（旧流程兼容）
+      // pending_sampling → sampling: 员工确认采样，联系供应商
       transitionAction = "start";
       actionLabel = "确认采样（联系供应商）";
       updates.samplingStartedBy = operatorName;
       updates.samplingStartedAt = now;
-      break;
-    case "submit_sampling_ready":
-      // sampling_collection → sampling_ready: 所有方案到货，提交进入验样阶段
-      transitionAction = "submit_sampling_ready";
-      actionLabel = "提交进入验样";
-      break;
-    case "submit_sampling_review":
-      // sampling_ready → sampling_review_submitted: 员工提交验样评价结果
-      transitionAction = "submit_sampling_review";
-      actionLabel = "提交验样结果";
-      updates.sampleConsistentWithImage = data.sampleConsistentWithImage ?? null;
-      updates.sampleMaterialEval = data.sampleMaterialEval ?? null;
-      updates.sampleWorkmanshipEval = data.sampleWorkmanshipEval ?? null;
-      updates.sampleFunctionEval = data.sampleFunctionEval ?? null;
-      updates.sampleRemarks = data.sampleRemarks ?? null;
-      updates.sampleReviewedBy = operatorName;
-      updates.sampleReviewedAt = now;
       break;
     case "arrive":
       // sampling → sample_arrived: 员工标记样品已到，此前禁止填写评价
