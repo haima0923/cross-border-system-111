@@ -7,7 +7,6 @@ import { ProductImage } from '@/components/shared/ProductImage';
 const SAMPLING_STATUSES = [
   'pending_sampling',
   'sampling_collection',
-  'sampling_ready',
   'sampling_review_submitted',
   'sample_reviewed',
 ] as const;
@@ -38,14 +37,6 @@ const STATUS_CONFIG: Record<SamplingStatus, {
     btnText: '继续建档',
     btnPrimary: true,
   },
-  sampling_ready: {
-    label: '待验样',
-    bg: 'bg-purple-100',
-    text: 'text-purple-700',
-    dot: 'bg-purple-400',
-    btnText: '进行验样',
-    btnPrimary: true,
-  },
   sampling_review_submitted: {
     label: '已提交验样',
     bg: 'bg-indigo-100',
@@ -66,9 +57,11 @@ const STATUS_CONFIG: Record<SamplingStatus, {
 
 // Sample order status for option-level display
 const ORDER_STATUS_CONFIG: Record<string, { label: string; bg: string; text: string }> = {
-  pending:  { label: '待采购', bg: 'bg-slate-100', text: 'text-slate-600' },
-  ordered:  { label: '已采购', bg: 'bg-blue-100',  text: 'text-blue-700' },
-  arrived:  { label: '已到货', bg: 'bg-green-100', text: 'text-green-700' },
+  pending:    { label: '待采购', bg: 'bg-slate-100', text: 'text-slate-600' },
+  ordered:    { label: '已采购', bg: 'bg-blue-100',  text: 'text-blue-700' },
+  arrived:    { label: '已到货', bg: 'bg-green-100', text: 'text-green-700' },
+  evaluating: { label: '填写评价', bg: 'bg-purple-100', text: 'text-purple-700' },
+  evaluated:  { label: '已评价', bg: 'bg-teal-100', text: 'text-teal-700' },
 };
 
 function ProductCard({
@@ -202,7 +195,7 @@ export default function SampleManagement() {
   const navigate = (productId: string) => setLocation(`/sampling/${productId}`);
 
   // Categorize: actionable vs waiting
-  const actionStatuses = new Set(['pending_sampling', 'sampling_collection', 'sampling_ready']);
+  const actionStatuses = new Set(['pending_sampling', 'sampling_collection']);
   const actionProducts = samplingProducts.filter(p => actionStatuses.has(p.status));
   const waitingProducts = samplingProducts.filter(p => !actionStatuses.has(p.status));
 

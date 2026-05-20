@@ -18,6 +18,31 @@ export const sampleSkuLinesTable = pgTable("sample_sku_lines", {
   notes: text("notes"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  // 采购池改造 - SKU级状态字段
+  purchaseStatus: text("purchase_status").notNull().default("pending_purchase"),
+  orderedAt: timestamp("ordered_at"),
+  arrivedAt: timestamp("arrived_at"),
+  inspectingStartedAt: timestamp("inspecting_started_at"),
+  passedAt: timestamp("passed_at"),
+  completedAt: timestamp("completed_at"),
+  // 异常相关字段
+  anomalyType: text("anomaly_type"),
+  anomalyNote: text("anomaly_note"),
+  anomalyReportedAt: timestamp("anomaly_reported_at"),
+  anomalyReportedBy: text("anomaly_reported_by"),
+  anomalyHandlingMethod: text("anomaly_handling_method"),
+  anomalyHandlingNote: text("anomaly_handling_note"),
+  anomalyHandledBy: text("anomaly_handled_by"),
+  anomalyHandledAt: timestamp("anomaly_handled_at"),
+  anomalyResolvedAt: timestamp("anomaly_resolved_at"),
+  anomalyImages: jsonb("anomaly_images").$type<string[]>(),
+  // SKU级验样评价字段
+  skuConsistentWithImage: boolean("sku_consistent_with_image"),
+  skuMaterialEval: text("sku_material_eval"),
+  skuWorkmanshipEval: text("sku_workmanship_eval"),
+  skuFunctionEval: text("sku_function_eval"),
+  skuRemarks: text("sku_remarks"),
+  packingQuantity: integer("packing_quantity"),
 });
 
 export type InsertSampleSkuLine = Omit<typeof sampleSkuLinesTable.$inferInsert, "id">;

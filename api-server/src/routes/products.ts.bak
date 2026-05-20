@@ -748,6 +748,18 @@ router.post("/products/:id/sample-action", async (req, res) => {
       updates.samplingStartedBy = operatorName;
       updates.samplingStartedAt = now;
       break;
+    case "start_sampling_collection":
+      // pending_sampling → sampling_collection: 员工开始采样建档（多方案模式）
+      transitionAction = "start_sampling_collection";
+      actionLabel = "开始采样建档";
+      updates.samplingStartedBy = operatorName;
+      updates.samplingStartedAt = now;
+      break;
+    case "submit_sampling_review":
+      // sampling_collection → sampling_review_submitted: 员工提交所有方案验样评价
+      transitionAction = "submit_sampling_review";
+      actionLabel = "提交验样结果";
+      break;
     case "arrive":
       // sampling → sample_arrived: 员工标记样品已到，此前禁止填写评价
       transitionAction = "arrive";
@@ -1002,6 +1014,20 @@ router.post("/products/:id/sample-action", async (req, res) => {
       res.status(400).json({ error: "Invalid action" });
       return;
   }
+
+  // ── 构造操作日志备注（仅 submit_sampling_review 时需要汇总信息）
+  let _logNote: string | undefined = (data.comment as string) ?? undefined;
+  if (action === 'submit_sampling_review') {
+    // 查询该产品的方案数量和异常SKU数量
+    const opts = await db.select().from(sampleOptionsTable).where(eq(sampleOptionsTable.productId, existing.id));
+    let anomalyCount = 0;
+    for (const opt of opts) {
+      const skus = await db.select().from(sampleSkuLinesTable).where(eq(sampleSkuLinesTable.sampleOptionId, opt.id));
+      anomalyCount += skus.filter((s: any) => s.anomalyType != null).length;
+    }
+    _logNote = opts.length + "个方案，" + anomalyCount + "个异常SKU";
+  }
+
   try {
     newStatus = assertTransitOrThrow(existing.status as ProductFromStatus, transitionAction);
   } catch (err) {
@@ -1023,7 +1049,7 @@ router.post("/products/:id/sample-action", async (req, res) => {
     actionLabel,
     existing.status,
     newStatus,
-    (data.comment as string) ?? undefined,
+    _logNote,
   );
 
   await db
@@ -1124,6 +1150,13 @@ router.post("/products/:id/manager-decision", async (req, res) => {
     return;
   }
 
+  // 构造 approve 的 note，记录选中的方案信息
+  const selectedOptionsForLog = await db.select({ id: sampleOptionsTable.id, label: sampleOptionsTable.label })
+    .from(sampleOptionsTable)
+    .where(inArray(sampleOptionsTable.id, selectedOptionIdsList));
+  const approveNote = "选择方案：" + selectedOptionsForLog.map(o => o.label || "方案" + (selectedOptionsForLog.indexOf(o) + 1)).join("、");
+  const approveActionLabel = "管理层同意采购";
+
   await db.transaction(async (tx) => {
     // 1. 获取该产品所有option的ID，然后清零所有SKU的 manager_selected 和 purchase_quantity
     const allOptions = await tx.select({ id: sampleOptionsTable.id })
@@ -1172,6 +1205,19 @@ router.post("/products/:id/manager-decision", async (req, res) => {
       })
       .where(eq(productsTable.id, id));
   });
+
+  // 5. 写入 historyLog，记录选中的方案信息
+  const approveHistoryLog = addHistory(
+    (product.historyLog as unknown[]) || [],
+    operatorName,
+    approveActionLabel,
+    product.status,
+    nextStatus,
+    approveNote,
+  );
+  await db.update(productsTable)
+    .set({ historyLog: approveHistoryLog })
+    .where(eq(productsTable.id, id));
 
   const [updated] = await db.select().from(productsTable).where(eq(productsTable.id, id));
   res.json(serializeProduct(updated as Record<string, unknown>));

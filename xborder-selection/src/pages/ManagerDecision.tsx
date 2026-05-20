@@ -1,11 +1,13 @@
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import { useLocation } from 'wouter';
 import { useAppStore, type SampleOption, type SampleSkuLine } from '@/context/StoreContext';
 import {
   ClipboardCheck, ArrowLeft, CheckCircle2, XCircle, Star,
   Layers, AlertTriangle, Package, Eye, ThumbsUp, ThumbsDown,
+  ZoomIn, X,
 } from 'lucide-react';
 import { ProductImage } from '@/components/shared/ProductImage';
+import { HistoryLog, type HistoryLogEntry } from '@/components/shared/HistoryLog';
 
 const EVAL_MAP: Record<string, { text: string; color: string }> = {
   '1': { text: '差', color: 'text-red-600 bg-red-50' },
@@ -14,6 +16,30 @@ const EVAL_MAP: Record<string, { text: string; color: string }> = {
   '4': { text: '良好', color: 'text-blue-600 bg-blue-50' },
   '5': { text: '优秀', color: 'text-green-600 bg-green-50' },
 };
+
+
+// 异常类型配置
+const ANOMALY_TYPES_MGR = [
+  { value: 'damaged', label: '\u635f\u574f' },
+  { value: 'color_spec_mismatch', label: '\u989c\u8272\u89c4\u683c\u4e0d\u5bf9' },
+  { value: 'shortage', label: '\u7f3a\u8d27' },
+  { value: 'quality_issue', label: '\u8d28\u91cf\u5dee' },
+  { value: 'other', label: '\u5176\u4ed6' },
+];
+
+// \u56fe\u7247\u706f\u7bb1\u7ec4\u4ef6
+function ImageLightbox({ src, onClose }: { src: string; onClose: () => void }) {
+  return (
+    <div className="fixed inset-0 bg-black/70 z-[60] flex items-center justify-center p-4" onClick={onClose}>
+      <div className="relative max-w-4xl max-h-[90vh]">
+        <button onClick={onClose} className="absolute -top-10 right-0 text-white hover:text-slate-300 transition-colors">
+          <X size={24} />
+        </button>
+        <img src={src} alt="" className="max-w-full max-h-[85vh] rounded-xl shadow-2xl object-contain" onClick={e => e.stopPropagation()} />
+      </div>
+    </div>
+  );
+}
 
 // Color stripes for comparison cards
 const CARD_COLORS = [
@@ -50,6 +76,7 @@ function SkuTable({
   onToggleSku,
   skuQuantities,
   onSetSkuQty,
+  onImageClick,
 }: {
   skus: SampleSkuLine[];
   isSelectedOption: boolean;
@@ -57,6 +84,7 @@ function SkuTable({
   onToggleSku: (id: string) => void;
   skuQuantities: Record<string, number>;
   onSetSkuQty: (id: string, qty: number) => void;
+  onImageClick?: (src: string) => void;
 }) {
   if (skus.length === 0) {
     return <p className="text-xs text-slate-400 italic mt-2">无 SKU 记录</p>;
@@ -74,12 +102,14 @@ function SkuTable({
             <th className="px-3 py-2 text-right font-medium">MOQ</th>
             {isSelectedOption && <th className="px-3 py-2 text-right font-medium">采购数量</th>}
             <th className="px-3 py-2 text-left font-medium">备注</th>
+            <th className="px-3 py-2 text-center font-medium">异常</th>
           </tr>
         </thead>
         <tbody>
           {skus.map((sku, idx) => {
             const checked = selectedSkuIds.has(sku.id);
             return (
+              <>
               <tr
                 key={sku.id}
                 className={`border-t border-slate-100 ${isSelectedOption && checked ? 'bg-primary/5' : ''}`}
@@ -137,7 +167,43 @@ function SkuTable({
                 <td className="px-3 py-2 text-slate-500 max-w-[160px] truncate">
                   {sku.notes || '-'}
                 </td>
+                <td className="px-3 py-2 text-center">
+                  {sku.anomalyType ? (
+                    <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] font-medium bg-orange-100 text-orange-700">
+                      <AlertTriangle size={10} />
+                      {ANOMALY_TYPES_MGR.find(t => t.value === sku.anomalyType)?.label || sku.anomalyType}
+                    </span>
+                  ) : (
+                    <span className="text-slate-300">-</span>
+                  )}
+                </td>
               </tr>
+              {sku.anomalyType && (
+                <tr className="border-t border-orange-100 bg-orange-50/50">
+                  <td colSpan={isSelectedOption ? 8 : 6} className="px-3 py-2">
+                    <div className="flex items-start gap-3">
+                      <AlertTriangle size={14} className="text-orange-500 mt-0.5 flex-shrink-0" />
+                      <div className="flex-1 min-w-0">
+                        <p className="text-xs font-medium text-orange-700 mb-1">{ANOMALY_TYPES_MGR.find(t => t.value === sku.anomalyType)?.label || sku.anomalyType}</p>
+                        <p className="text-xs text-orange-600">{sku.anomalyNote || '-'}</p>
+                        {sku.anomalyImages && (sku.anomalyImages as string[]).length > 0 && (
+                          <div className="mt-2 flex gap-2 flex-wrap">
+                            {(sku.anomalyImages as string[]).map((img: string, imgIdx: number) => (
+                              <div key={imgIdx} className="w-14 h-14 rounded-lg overflow-hidden border border-orange-200 cursor-pointer group relative" onClick={() => onImageClick?.(img)}>
+                                <img src={img} alt="" className="w-full h-full object-cover" />
+                                <div className="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition-colors flex items-center justify-center">
+                                  <ZoomIn size={12} className="text-white opacity-0 group-hover:opacity-100 transition-opacity" />
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </td>
+                </tr>
+              )}
+              </>
             );
           })}
         </tbody>
@@ -157,6 +223,7 @@ function OptionComparisonCard({
   onToggleSku,
   skuQuantities,
   onSetSkuQty,
+  onImageClick,
 }: {
   option: SampleOption;
   skus: SampleSkuLine[];
@@ -167,6 +234,7 @@ function OptionComparisonCard({
   onToggleSku: (id: string) => void;
   skuQuantities: Record<string, number>;
   onSetSkuQty: (id: string, qty: number) => void;
+  onImageClick?: (src: string) => void;
 }) {
   const color = CARD_COLORS[colorIndex % CARD_COLORS.length];
   const materialEval = evalLabel(option.sampleMaterialEval);
@@ -190,6 +258,15 @@ function OptionComparisonCard({
       <div className={`h-1.5 ${color.stripe}`} />
 
       <div className="p-5">
+        {/* Anomaly warning banner */}
+        {skus.some(s => s.anomalyType) && (
+          <div className="mb-4 px-3 py-2 bg-orange-50 border border-orange-200 rounded-xl flex items-center gap-2">
+            <AlertTriangle size={16} className="text-orange-500 flex-shrink-0" />
+            <span className="text-xs font-medium text-orange-700">
+              此方案有 {skus.filter(s => s.anomalyType).length} 个SKU存在异常，请注意查看
+            </span>
+          </div>
+        )}
         {/* Select radio */}
         <div
           className="flex items-start gap-3 cursor-pointer mb-4"
@@ -286,6 +363,7 @@ function OptionComparisonCard({
             onToggleSku={onToggleSku}
             skuQuantities={skuQuantities}
             onSetSkuQty={onSetSkuQty}
+            onImageClick={onImageClick}
           />
         </div>
       </div>
@@ -313,6 +391,7 @@ function DecisionDetail({
   const [showReject, setShowReject] = useState(false);
   const [rejectComment, setRejectComment] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [lightboxSrc, setLightboxSrc] = useState<string | null>(null);
 
   if (!product) {
     return (
@@ -497,6 +576,7 @@ function DecisionDetail({
                 onToggleSku={handleToggleSku}
                 skuQuantities={skuQuantities}
                 onSetSkuQty={handleSetSkuQty}
+                onImageClick={(src) => setLightboxSrc(src)}
               />
             );
           })}
@@ -540,6 +620,9 @@ function DecisionDetail({
         </div>
       </div>
 
+      {/* Image lightbox */}
+      {lightboxSrc && <ImageLightbox src={lightboxSrc} onClose={() => setLightboxSrc(null)} />}
+
       {/* Reject confirmation modal */}
       {showReject && (
         <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
@@ -571,6 +654,13 @@ function DecisionDetail({
           </div>
         </div>
       )}
+
+      {/* 操作日志 */}
+      {product.historyLog && (product.historyLog as any[]).length > 0 && (
+        <div className="mt-6 bg-white rounded-2xl border border-slate-200 p-6">
+          <HistoryLog log={(product.historyLog as any[]) as HistoryLogEntry[]} title="操作日志" maxItems={10} />
+        </div>
+      )}
     </div>
   );
 }
@@ -578,13 +668,38 @@ function DecisionDetail({
 // ─── Main page: list of pending decisions ─────────────────────────────────────
 export default function ManagerDecision() {
   const [, setLocation] = useLocation();
-  const { products, sampleOptions, sampleSkuLines } = useAppStore();
+  const { products, sampleOptions, sampleSkuLines, currentUser } = useAppStore();
   const [selectedProductId, setSelectedProductId] = useState<string | null>(null);
+
+  // ── 未读提醒逻辑 ─────────────────────────────────────────────────────────
+  const productViewedKey = (productId: string) => 'mgr_decision_pv_' + currentUser.id + '_' + productId;
+  const [productLastViewed, setProductLastViewed] = useState<Record<string, string | null>>(() => {
+    const init: Record<string, string | null> = {};
+    products.forEach(p => { init[p.id] = localStorage.getItem(productViewedKey(p.id)); });
+    return init;
+  });
+
+  const markProductViewed = (productId: string) => {
+    const now = new Date().toISOString();
+    localStorage.setItem(productViewedKey(productId), now);
+    setProductLastViewed(prev => ({ ...prev, [productId]: now }));
+  };
+
+  const isProductUnread = (product: any) => {
+    const viewed = productLastViewed[product.id];
+    if (!viewed) return true;
+    return product.updatedAt > viewed;
+  };
 
   // Products awaiting manager decision
   const decisionProducts = products.filter(p =>
     p.status === 'sampling_review_submitted'
   );
+
+  // ── 统计未读数量（显示在页面标题）───────────────────────────────────────
+  const unreadCount = useMemo(() => {
+    return decisionProducts.filter(p => isProductUnread(p)).length;
+  }, [decisionProducts, productLastViewed]);
 
   if (selectedProductId) {
     return (
@@ -604,9 +719,14 @@ export default function ManagerDecision() {
           </div>
           <h1 className="text-2xl font-bold text-slate-900">经理决策</h1>
         </div>
-        <p className="text-slate-500 text-sm ml-14">
+        <p className="text-slate-500 text-sm ml-14 flex items-center gap-2">
           待审批验样结果
           <span className="ml-2 font-semibold text-slate-700">{decisionProducts.length}</span> 个
+          {unreadCount > 0 && (
+            <span className="inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full bg-red-500 text-white text-[11px] font-bold leading-none">
+              {unreadCount}
+            </span>
+          )}
         </p>
       </div>
 
@@ -629,7 +749,8 @@ export default function ManagerDecision() {
             return (
               <div
                 key={product.id}
-                className="bg-white rounded-2xl border border-slate-200 shadow-sm px-6 py-5 hover:border-primary/30 hover:shadow-md transition-all duration-200"
+                onClick={() => { markProductViewed(product.id); setSelectedProductId(product.id); }}
+                className="bg-white rounded-2xl border border-slate-200 shadow-sm px-6 py-5 hover:border-primary/30 hover:shadow-md transition-all duration-200 cursor-pointer"
               >
                 <div className="flex items-start gap-4">
                   <ProductImage
@@ -639,8 +760,11 @@ export default function ManagerDecision() {
                     alt={product.productName}
                   />
                   <div className="flex-1 min-w-0">
-                    <h3 className="text-sm font-semibold text-slate-800 truncate mb-1">
-                      {product.productName}
+                    <h3 className="text-sm font-semibold text-slate-800 truncate mb-1 flex items-center gap-2">
+                      <span className="flex-1">{product.productName}</span>
+                      {isProductUnread(product) && (
+                        <span className="w-2.5 h-2.5 rounded-full bg-red-500 shrink-0 animate-pulse" title="新提交" />
+                      )}
                     </h3>
                     <div className="flex items-center gap-3 flex-wrap">
                       <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium bg-indigo-100 text-indigo-700">
@@ -652,12 +776,9 @@ export default function ManagerDecision() {
                       </span>
                     </div>
                   </div>
-                  <button
-                    onClick={() => setSelectedProductId(product.id)}
-                    className="flex-shrink-0 flex items-center gap-1.5 px-4 py-2 rounded-xl text-sm font-medium bg-primary text-primary-foreground hover:bg-primary/90 shadow-sm shadow-primary/20"
-                  >
+                  <div className="flex-shrink-0 flex items-center gap-1.5 px-4 py-2 rounded-xl text-sm font-medium bg-primary text-primary-foreground shadow-sm shadow-primary/20">
                     对比决策
-                  </button>
+                  </div>
                 </div>
               </div>
             );

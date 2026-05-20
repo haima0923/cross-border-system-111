@@ -187,8 +187,9 @@ export default function ProductEntry() {
   // Detect if we're in supplier_changing mode (负向决策回流)
   const editProduct = editId ? products.find(p => p.id === editId) : null;
   const isSupplierChangingMode = editProduct?.status === 'supplier_changing';
-  // 草稿/待补充状态下，SKU应完全可编辑（可添加/删除/修改）
-  const isSkuEditable = !editId || isSupplierChangingMode || editProduct?.status === 'draft' || editProduct?.status === 'pending_info';
+  const isResubmitMode = editProduct?.status === 'completed' || editProduct?.status === 'rejected' || editProduct?.status === 'returned';
+  // 草稿/待补充/重新提交状态下，SKU应完全可编辑（可添加/删除/修改）
+  const isSkuEditable = !editId || isSupplierChangingMode || editProduct?.status === 'draft' || editProduct?.status === 'pending_info' || isResubmitMode;
 
   // ── Edit-mode gate ────────────────────────────────────────────────────────
   // When editId is set but the product data has not yet arrived, we must NOT
@@ -386,13 +387,128 @@ export default function ProductEntry() {
     }
   };
 
+
+  // 重新提交初筛（completed/rejected/returned状态）
+  const handleResubmit = async () => {
+    setIsSubmitting(true);
+    try {
+      const payload = {
+        ...form,
+        status: 'screening_submitted' as any,
+        submitterName: currentUser.name,
+        employeeId: currentUser.id,
+        resubmitted: true,
+      };
+      await updateProduct(editId, payload, '重新提交初筛');
+      // 同步SKU变更（完整：更新/新增/删除）
+      if (isSkuEditable) {
+        const option = sampleOptions.find(o => o.productId === editId);
+        if (option) {
+          const existingSkus = sampleSkuLines.filter(s => s.sampleOptionId === option.id);
+          const existingIds = new Set(existingSkus.map(s => s.id));
+          // 1. 更新已有SKU
+          for (const row of skuRows) {
+            if (row.skuId && existingIds.has(row.skuId)) {
+              await updateSampleSkuLine(row.skuId, {
+                skuName: row.skuName.trim() || undefined,
+                unitPrice: row.unitPriceStr !== '' ? Number(row.unitPriceStr) : undefined,
+                moq: row.moqStr !== '' ? parseInt(row.moqStr, 10) : undefined,
+                imageUrl: row.imageUrl.trim() || undefined,
+              });
+              existingIds.delete(row.skuId);
+            }
+          }
+          // 2. 新增没有skuId的行
+          for (const row of skuRows) {
+            if (!row.skuId) {
+              await addSampleSkuLine({
+                sampleOptionId: option.id,
+                skuName: row.skuName.trim() || '默认款',
+                unitPrice: row.unitPriceStr !== '' ? Number(row.unitPriceStr) : form.purchasePrice as number | undefined,
+                moq: row.moqStr !== '' ? parseInt(row.moqStr, 10) : form.moq as number | undefined,
+                imageUrl: row.imageUrl.trim() || undefined,
+              });
+            }
+          }
+          // 3. 删除已移除的SKU
+          for (const deletedId of existingIds) {
+            await deleteSampleSkuLine(deletedId);
+          }
+        }
+      }
+      setLocation('/workbench');
+    } catch (err) {
+      alert('重新提交失败，请重试');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  // 保存草稿（completed/rejected/returned状态，不改变产品状态）
+  const handleSaveResubmitDraft = async () => {
+    setIsSubmitting(true);
+    try {
+      // 保存草稿：action=save_draft，后端会将状态改为returned
+      const { status: _omitStatus, ...formWithoutStatus } = form;
+      const payload = {
+        ...formWithoutStatus,
+        status: 'save_draft' as any,
+        submitterName: currentUser.name,
+        employeeId: currentUser.id,
+      };
+      await updateProduct(editId, payload, '保存草稿');
+      // 同步SKU变更（完整：更新/新增/删除）
+      if (isSkuEditable) {
+        const option = sampleOptions.find(o => o.productId === editId);
+        if (option) {
+          const existingSkus = sampleSkuLines.filter(s => s.sampleOptionId === option.id);
+          const existingIds = new Set(existingSkus.map(s => s.id));
+          // 1. 更新已有SKU
+          for (const row of skuRows) {
+            if (row.skuId && existingIds.has(row.skuId)) {
+              await updateSampleSkuLine(row.skuId, {
+                skuName: row.skuName.trim() || undefined,
+                unitPrice: row.unitPriceStr !== '' ? Number(row.unitPriceStr) : undefined,
+                moq: row.moqStr !== '' ? parseInt(row.moqStr, 10) : undefined,
+                imageUrl: row.imageUrl.trim() || undefined,
+              });
+              existingIds.delete(row.skuId);
+            }
+          }
+          // 2. 新增没有skuId的行
+          for (const row of skuRows) {
+            if (!row.skuId) {
+              await addSampleSkuLine({
+                sampleOptionId: option.id,
+                skuName: row.skuName.trim() || '默认款',
+                unitPrice: row.unitPriceStr !== '' ? Number(row.unitPriceStr) : form.purchasePrice as number | undefined,
+                moq: row.moqStr !== '' ? parseInt(row.moqStr, 10) : form.moq as number | undefined,
+                imageUrl: row.imageUrl.trim() || undefined,
+              });
+            }
+          }
+          // 3. 删除已移除的SKU
+          for (const deletedId of existingIds) {
+            await deleteSampleSkuLine(deletedId);
+          }
+        }
+      }
+      alert('草稿已保存');
+      setLocation('/workbench');
+    } catch (err) {
+      alert('保存失败，请重试');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
   const inputCls = 'w-full px-4 py-2.5 rounded-xl border border-slate-300 focus:border-primary focus:ring-2 focus:ring-primary/20';
 
   return (
     <div className="max-w-6xl mx-auto">
       <div className="mb-6">
         <h1 className="text-2xl font-bold text-slate-900">
-          {isSupplierChangingMode ? '更换供应商' : editId ? '编辑候选产品' : '新增候选录入'}
+          {isResubmitMode ? '修改产品信息' : isSupplierChangingMode ? '更换供应商' : editId ? '编辑候选产品' : '新增候选录入'}
         </h1>
         <p className="text-slate-500 mt-1">
           {isSupplierChangingMode
@@ -828,6 +944,31 @@ export default function ProductEntry() {
                     <><RefreshCw size={18} /> 换供完成，提交采样</>
                   )}
                 </button>
+              ) : isResubmitMode ? (
+                /* Resubmit mode: save draft + resubmit to screening */
+                <>
+                  <button
+                    onClick={handleResubmit}
+                    disabled={isSubmitting}
+                    className="w-full flex items-center justify-center gap-2 bg-gradient-to-r from-primary to-primary/90 text-white px-4 py-3 rounded-xl hover:shadow-lg hover:-translate-y-0.5 transition-all font-semibold disabled:opacity-50 disabled:cursor-not-allowed disabled:transform-none"
+                  >
+                    {isSubmitting ? (
+                      <>
+                        <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin inline-block" />
+                        提交中…
+                      </>
+                    ) : (
+                      <><Send size={18} /> 重新提交初筛</>
+                    )}
+                  </button>
+                  <button
+                    onClick={handleSaveResubmitDraft}
+                    disabled={isSubmitting}
+                    className="w-full flex items-center justify-center gap-2 bg-white border border-slate-200 text-slate-700 px-4 py-2.5 rounded-xl hover:bg-slate-50 transition-colors text-sm font-medium"
+                  >
+                    <Save size={16} /> 保存草稿
+                  </button>
+                </>
               ) : (
                 /* Normal mode: regular submit buttons */
                 <>

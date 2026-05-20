@@ -7,6 +7,7 @@ import router from "./routes";
 import imageServingRouter from "./routes/imageServing";
 import adminRouter from "./routes/admin";
 import { authenticate } from "./middleware/authenticate";
+import uploadRouter from "./routes/upload";
 import { logger } from "./lib/logger";
 
 const app: Express = express();
@@ -49,6 +50,9 @@ app.use("/api", imageServingRouter);
 
 // Admin routes — use own authenticate + requireAdmin internally
 app.use("/api", adminRouter);
+
+// Upload routes — JWT required
+app.use("/api", authenticate, uploadRouter);
 
 // All other API routes — JWT required
 app.use("/api", authenticate, router);

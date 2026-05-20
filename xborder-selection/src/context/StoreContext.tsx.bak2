@@ -18,7 +18,6 @@ export interface SampleOption {
   optionLabel?: string | null;
   supplierName?: string | null;
   link1688?: string | null;
-  shippingCost?: number | null;
   contactStatus?: string | null;
   material?: string | null;
   packagingNote?: string | null;
@@ -60,43 +59,8 @@ export interface SampleSkuLine {
   managerSelected?: boolean | null;
   purchaseQuantity?: number | null;
   notes?: string | null;
-  // 采购相关字段
-  purchaseStatus?: string;
-  orderedAt?: string | null;
-  arrivedAt?: string | null;
-  inspectingStartedAt?: string | null;
-  passedAt?: string | null;
-  completedAt?: string | null;
-  // 异常上报
-  anomalyType?: string | null;
-  anomalyNote?: string | null;
-  anomalyReportedAt?: string | null;
-  anomalyReportedBy?: string | null;
-  // 经理处置
-  anomalyHandlingMethod?: string | null;
-  anomalyHandlingNote?: string | null;
-  anomalyHandledBy?: string | null;
-  anomalyHandledAt?: string | null;
-  anomalyResolvedAt?: string | null;
-  anomalyImages?: string[] | null;
-  // SKU级验样评价
-  skuConsistentWithImage?: boolean | null;
-  skuMaterialEval?: string | null;
-  skuWorkmanshipEval?: string | null;
-  skuFunctionEval?: string | null;
-  skuRemarks?: string | null;
   createdAt: string;
   updatedAt: string;
-}
-
-// 操作日志类型
-export interface HistoryLogEntry {
-  action: string;
-  actor: string;
-  fromStatus?: string;
-  toStatus?: string;
-  note?: string;
-  timestamp: string;
 }
 
 interface StoreState {
@@ -111,9 +75,6 @@ interface StoreState {
   addProduct: (product: Partial<Product>, skus?: SkuInput[]) => Promise<Product>;
   updateProduct: (id: string, updates: Partial<Product>, logAction?: string, note?: string) => Promise<void>;
   sampleAction: (id: string, action: string, data?: Record<string, unknown>) => Promise<void>;
-  // SKU级采购操作
-  skuPurchaseAction: (productId: string, skuLineId: string, action: string, data?: Record<string, unknown>) => Promise<void>;
-  completePurchase: (productId: string) => Promise<void>;
   addPurchaseOrder: (po: Partial<PurchaseOrder>) => void;
   updatePurchaseOrderStatus: (id: string, status: PurchaseOrder['status']) => void;
   updatePurchaseOrder: (id: string, updates: Partial<PurchaseOrder>) => void;
@@ -124,13 +85,6 @@ interface StoreState {
   addSampleSkuLine: (sku: Partial<SampleSkuLine>) => Promise<SampleSkuLine>;
   updateSampleSkuLine: (id: string, updates: Partial<SampleSkuLine>) => Promise<SampleSkuLine>;
   deleteSampleSkuLine: (id: string) => Promise<void>;
-  updateSkuEvaluation: (skuLineId: string, evaluation: {
-    skuConsistentWithImage?: boolean;
-    skuMaterialEval?: string;
-    skuWorkmanshipEval?: string;
-    skuFunctionEval?: string;
-    skuRemarks?: string;
-  }) => Promise<void>;
   managerDecision: (productId: string, payload: {
     action: 'approve' | 'reject';
     selectedOptionId?: string;        // 保留向后兼容
@@ -139,8 +93,6 @@ interface StoreState {
     skuQuantities?: Record<string, number>;
     comment?: string;
   }) => Promise<void>;
-  reportSamplingAnomaly: (skuLineId: string, data: { anomalyType: string; anomalyNote: string }) => Promise<void>;
-  approveSamplingAnomaly: (skuLineId: string, data: { approved: boolean; note?: string }) => Promise<void>;
   refetch: () => Promise<void>;
 }
 
@@ -164,7 +116,7 @@ async function apiFetch(url: string, options?: RequestInit) {
     });
   } catch (networkErr) {
     const hint = '请检查网络连接。若您使用了浏览器插件（如广告拦截器），请尝试无痕模式或关闭插件后重试。';
-    throw new Error('网络请求失败：' + hint);
+    throw new Error(`网络请求失败：${hint}`);
   }
   if (res.status === 401) {
     window.location.href = '/login';
@@ -173,19 +125,19 @@ async function apiFetch(url: string, options?: RequestInit) {
   if (res.status === 403) {
     const body = await res.json().catch(() => ({ error: '权限不足' }));
     const msg = body.error || '权限不足，当前角色无法执行此操作';
-    alert('权限不足：' + msg);
-    throw new Error('403 权限不足: ' + msg);
+    alert(`🚫 ${msg}`);
+    throw new Error(`403 权限不足: ${msg}`);
   }
   if (res.status === 404) {
     throw new Error('404 资源不存在，请刷新页面后重试');
   }
   if (res.status >= 500) {
     const body = await res.text().catch(() => '');
-    throw new Error('服务端异常（' + res.status + '），请稍后重试。' + (body ? '详情：' + body.slice(0, 200) : ''));
+    throw new Error(`服务端异常（${res.status}），请稍后重试。${body ? '详情：' + body.slice(0, 200) : ''}`);
   }
   if (!res.ok) {
     const err = await res.text().catch(() => '');
-    throw new Error('请求失败（' + res.status + '）：' + (err || '未知错误'));
+    throw new Error(`请求失败（${res.status}）：${err || '未知错误'}`);
   }
   return res.json();
 }
@@ -210,34 +162,11 @@ export function StoreProvider({
   const [sampleSkuLines, setSampleSkuLines] = useState<SampleSkuLine[]>([]);
   const [loading, setLoading] = useState(true);
 
-  // 员工提交采样异常
-  // 报告采样异常 - 优化：局部更新而非全量refetch
-  const reportSamplingAnomaly = async (skuLineId: string, data: { anomalyType: string; anomalyNote: string; anomalyImages?: string[] }): Promise<void> => {
-    await apiFetch(API + '/sample-sku-lines/' + skuLineId + '/sampling-anomaly', {
-      method: 'POST',
-      body: JSON.stringify({ ...data, operator: currentUser.name }),
-    });
-    // 局部更新：获取最新SKU数据并更新状态
-    const updatedSku = await apiFetch(API + '/sample-sku-lines/' + skuLineId);
-    setSampleSkuLines(prev => prev.map(s => s.id === skuLineId ? { ...s, ...updatedSku } : s));
-  };
-
-  // 经理审批采样异常 - 优化：局部更新而非全量refetch
-  const approveSamplingAnomaly = async (skuLineId: string, data: { approved: boolean; note?: string }): Promise<void> => {
-    await apiFetch(API + '/sample-sku-lines/' + skuLineId + '/approve-sampling-anomaly', {
-      method: 'POST',
-      body: JSON.stringify({ ...data, operator: currentUser.name }),
-    });
-    // 局部更新：获取最新SKU数据并更新状态
-    const updatedSku = await apiFetch(API + '/sample-sku-lines/' + skuLineId);
-    setSampleSkuLines(prev => prev.map(s => s.id === skuLineId ? { ...s, ...updatedSku } : s));
-  };
-
   const refetch = useCallback(async () => {
     try {
       const [prods, pos] = await Promise.all([
-        apiFetch(API + '/products'),
-        apiFetch(API + '/purchase-orders'),
+        apiFetch(`${API}/products`),
+        apiFetch(`${API}/purchase-orders`),
       ]);
       setProducts(prods);
       setPurchaseOrders(pos);
@@ -246,8 +175,8 @@ export function StoreProvider({
     }
     try {
       const [opts, skus] = await Promise.all([
-        apiFetch(API + '/sample-options'),
-        apiFetch(API + '/sample-sku-lines'),
+        apiFetch(`${API}/sample-options`),
+        apiFetch(`${API}/sample-sku-lines`),
       ]);
       setSampleOptions(opts);
       setSampleSkuLines(skus);
@@ -261,20 +190,8 @@ export function StoreProvider({
     refetch().finally(() => setLoading(false));
   }, [refetch]);
 
-  // 30秒自动轮询（仅在非loading时触发，避免刷新冲突）
-  useEffect(() => {
-    const intervalId = setInterval(() => {
-      if (!loading) {
-        refetch();
-      }
-    }, 30000);
-    
-    return () => clearInterval(intervalId);
-  }, [loading, refetch]);
-
-
   const logout = async () => {
-    await fetch(API + '/auth/logout', {
+    await fetch(`${API}/auth/logout`, {
       method: 'POST',
       credentials: 'include',
     });
@@ -287,7 +204,7 @@ export function StoreProvider({
       : product.status === 'pending_info' ? 'pending_info'
       : 'draft';
 
-    return apiFetch(API + '/products', {
+    return apiFetch(`${API}/products`, {
       method: 'POST',
       body: JSON.stringify({
         ...product,
@@ -317,14 +234,14 @@ export function StoreProvider({
     let body: Record<string, unknown>;
 
     if (status === 'screening_submitted') {
-      url = API + '/products/' + id + '/submit-screening';
+      url = `${API}/products/${id}/submit-screening`;
       method = 'POST';
       body = {
         employeeNote: note || (updates as any).employeeNote || '',
         submitterName: currentUser.name,
       };
     } else if (status === 'pending_sampling') {
-      url = API + '/products/' + id + '/manager-action';
+      url = `${API}/products/${id}/manager-action`;
       method = 'POST';
       body = {
         action: 'approve',
@@ -332,7 +249,7 @@ export function StoreProvider({
         comment: (updates as any).managerComment || note || '',
       };
     } else if (status === 'pending_purchase') {
-      url = API + '/products/' + id + '/manager-action';
+      url = `${API}/products/${id}/manager-action`;
       method = 'POST';
       body = {
         action: 'approve',
@@ -340,7 +257,7 @@ export function StoreProvider({
         comment: (updates as any).managerComment || note || '',
       };
     } else if (status === 'rejected') {
-      url = API + '/products/' + id + '/manager-action';
+      url = `${API}/products/${id}/manager-action`;
       method = 'POST';
       body = {
         action: 'reject',
@@ -348,7 +265,7 @@ export function StoreProvider({
         comment: (updates as any).managerComment || note || '',
       };
     } else if (status === 'supplier_change_requested') {
-      url = API + '/products/' + id + '/manager-action';
+      url = `${API}/products/${id}/manager-action`;
       method = 'POST';
       body = {
         action: 'request_supplier_change',
@@ -356,23 +273,35 @@ export function StoreProvider({
         comment: (updates as any).managerComment || note || '',
       };
     } else if (status === 'returned') {
-      url = API + '/products/' + id + '/manager-action';
+      url = `${API}/products/${id}/manager-action`;
       method = 'POST';
       body = { action: 'return', managerName: currentUser.name, comment: note || '' };
     } else if (status === 'pending_analysis') {
-      url = API + '/products/' + id;
+      url = `${API}/products/${id}`;
       method = 'PUT';
       body = { ...updates, submitterName: currentUser.name, action: 'submit_analysis' };
     } else if (status === 'analyzed_pending_review') {
-      url = API + '/products/' + id + '/run-analysis';
+      url = `${API}/products/${id}/run-analysis`;
       method = 'POST';
       body = {};
     } else if (status === 'pending_info') {
-      url = API + '/products/' + id;
+      url = `${API}/products/${id}`;
       method = 'PUT';
       body = { ...updates, submitterName: currentUser.name, action: 'pending_info' };
+    } else if (status === 'screening_submitted' && (updates as any).resubmitted) {
+      // 重新提交初筛：走PUT路由，保留产品字段修改
+      const { status: _s, resubmitted: _r, ...updatesWithoutStatus } = updates;
+      url = `${API}/products/${id}`;
+      method = 'PUT';
+      body = { ...updatesWithoutStatus, submitterName: currentUser.name, action: 'resubmit_screening' };
+    } else if (status === 'save_draft') {
+      // 保存草稿：后端会将状态改为returned
+      const { status: _s, ...updatesWithoutStatus } = updates;
+      url = `${API}/products/${id}`;
+      method = 'PUT';
+      body = { ...updatesWithoutStatus, submitterName: currentUser.name, action: 'save_draft' };
     } else {
-      url = API + '/products/' + id;
+      url = `${API}/products/${id}`;
       method = 'PUT';
       body = { ...updates, submitterName: currentUser.name, action: 'draft' };
     }
@@ -386,7 +315,7 @@ export function StoreProvider({
   };
 
   const sampleAction = (id: string, action: string, data?: Record<string, unknown>): Promise<void> => {
-    return apiFetch(API + '/products/' + id + '/sample-action', {
+    return apiFetch(`${API}/products/${id}/sample-action`, {
       method: 'POST',
       body: JSON.stringify({ action, ...data }),
     }).then((updated: Product) => {
@@ -396,38 +325,8 @@ export function StoreProvider({
     });
   };
 
-  // SKU级采购动作 - 操作后局部刷新
-  const skuPurchaseAction = async (productId: string, skuLineId: string, action: string, data?: Record<string, unknown>): Promise<void> => {
-    // 执行操作 - 后端返回更新后的产品对象
-    const updatedProduct = await apiFetch(API + "/products/" + productId + "/sample-action", {
-      method: "POST",
-      body: JSON.stringify({ skuLineId, action, ...data }),
-    });
-    // 立即更新产品状态（UI先响应）
-    setProducts(prev => prev.map(p => p.id === productId ? updatedProduct : p));
-    // 并行拉取最新SKU和方案数据（不阻塞返回，后台刷新）
-    Promise.all([
-      apiFetch(API + "/sample-sku-lines"),
-      apiFetch(API + "/sample-options"),
-    ]).then(([skus, opts]) => {
-      setSampleSkuLines(skus);
-      setSampleOptions(opts);
-    });
-  };
-
-  // 完成入库（所有SKU验货通过后）- 优化：局部更新而非全量refetch
-  const completePurchase = async (productId: string): Promise<void> => {
-    await apiFetch(API + '/products/' + productId + '/complete-purchase', {
-      method: 'POST',
-      body: JSON.stringify({}),
-    });
-    // 局部更新：获取最新产品数据并更新状态
-    const updatedProduct = await apiFetch(API + '/products/' + productId);
-    setProducts(prev => prev.map(p => p.id === productId ? { ...p, ...updatedProduct } : p));
-  };
-
   const addPurchaseOrder = (po: Partial<PurchaseOrder>) => {
-    apiFetch(API + '/purchase-orders', {
+    apiFetch(`${API}/purchase-orders`, {
       method: 'POST',
       body: JSON.stringify({
         productId: po.productId,
@@ -451,7 +350,7 @@ export function StoreProvider({
     if (status === 'arrived')   timestamps.arrivedAt   = now;
     if (status === 'completed') timestamps.completedAt = now;
 
-    apiFetch(API + '/purchase-orders/' + id, {
+    apiFetch(`${API}/purchase-orders/${id}`, {
       method: 'PUT',
       body: JSON.stringify({ status, operator: currentUser.name, ...timestamps }),
     })
@@ -464,7 +363,7 @@ export function StoreProvider({
   };
 
   const updatePurchaseOrder = (id: string, updates: Partial<PurchaseOrder>) => {
-    apiFetch(API + '/purchase-orders/' + id, {
+    apiFetch(`${API}/purchase-orders/${id}`, {
       method: 'PUT',
       body: JSON.stringify({ ...updates, operator: currentUser.name }),
     })
@@ -477,7 +376,7 @@ export function StoreProvider({
   };
 
   const addSampleOption = async (option: Partial<SampleOption>): Promise<SampleOption> => {
-    const created = await apiFetch(API + '/sample-options', {
+    const created = await apiFetch(`${API}/sample-options`, {
       method: 'POST',
       body: JSON.stringify({ ...option, createdBy: currentUser.name }),
     });
@@ -486,7 +385,7 @@ export function StoreProvider({
   };
 
   const updateSampleOption = async (id: string, updates: Partial<SampleOption>): Promise<SampleOption> => {
-    const updated = await apiFetch(API + '/sample-options/' + id, {
+    const updated = await apiFetch(`${API}/sample-options/${id}`, {
       method: 'PUT',
       body: JSON.stringify(updates),
     });
@@ -495,7 +394,7 @@ export function StoreProvider({
   };
 
   const updateSampleOptionStatus = async (id: string, sampleOrderStatus: string): Promise<SampleOption> => {
-    const updated = await apiFetch(API + '/sample-options/' + id + '/status', {
+    const updated = await apiFetch(`${API}/sample-options/${id}/status`, {
       method: 'PATCH',
       body: JSON.stringify({ sampleOrderStatus }),
     });
@@ -504,13 +403,13 @@ export function StoreProvider({
   };
 
   const deleteSampleOption = async (id: string): Promise<void> => {
-    await apiFetch(API + '/sample-options/' + id, { method: 'DELETE' });
+    await apiFetch(`${API}/sample-options/${id}`, { method: 'DELETE' });
     setSampleOptions(prev => prev.filter(o => o.id !== id));
     setSampleSkuLines(prev => prev.filter(s => s.sampleOptionId !== id));
   };
 
   const addSampleSkuLine = async (sku: Partial<SampleSkuLine>): Promise<SampleSkuLine> => {
-    const created = await apiFetch(API + '/sample-sku-lines', {
+    const created = await apiFetch(`${API}/sample-sku-lines`, {
       method: 'POST',
       body: JSON.stringify(sku),
     });
@@ -519,7 +418,7 @@ export function StoreProvider({
   };
 
   const updateSampleSkuLine = async (id: string, updates: Partial<SampleSkuLine>): Promise<SampleSkuLine> => {
-    const updated = await apiFetch(API + '/sample-sku-lines/' + id, {
+    const updated = await apiFetch(`${API}/sample-sku-lines/${id}`, {
       method: 'PUT',
       body: JSON.stringify(updates),
     });
@@ -528,32 +427,10 @@ export function StoreProvider({
   };
 
   const deleteSampleSkuLine = async (id: string): Promise<void> => {
-    await apiFetch(API + '/sample-sku-lines/' + id, { method: 'DELETE' });
+    await apiFetch(`${API}/sample-sku-lines/${id}`, { method: 'DELETE' });
     setSampleSkuLines(prev => prev.filter(s => s.id !== id));
   };
 
-  const updateSkuEvaluation = async (
-    skuLineId: string,
-    evaluation: {
-      skuConsistentWithImage?: boolean;
-      skuMaterialEval?: string;
-      skuWorkmanshipEval?: string;
-      skuFunctionEval?: string;
-      skuRemarks?: string;
-      packingQuantity?: number;
-    }
-  ): Promise<void> =>
-  {
-    const url = API + '/sample-sku-lines/' + skuLineId + '/evaluation';
-    const updated = await apiFetch(url, {
-      method: 'PUT',
-      body: JSON.stringify({ ...evaluation, operator: currentUser?.name || currentUser?.username || 'Anonymous' }),
-    });
-    // 只更新对应的SKU行数据，避免全量refetch导致输入卡顿和位置重排
-    setSampleSkuLines(prev => prev.map(s => s.id === skuLineId ? updated : s));
-  };
-
-  // 经理决策 - 优化：局部更新而非全量refetch
   const managerDecision = async (
     productId: string,
     payload: {
@@ -564,27 +441,22 @@ export function StoreProvider({
       comment?: string;
     },
   ): Promise<void> => {
-    const updated = await apiFetch(API + '/products/' + productId + '/manager-decision', {
+    await apiFetch(`${API}/products/${productId}/manager-decision`, {
       method: 'POST',
       body: JSON.stringify(payload),
     });
-    // 局部更新产品数据
-    setProducts(prev => prev.map(p => p.id === productId ? { ...p, ...updated } : p));
+    await refetch();
   };
-
 
   return (
     <StoreContext.Provider
       value={{
         role, currentUser, products, purchaseOrders, sampleOptions, sampleSkuLines, loading,
         logout, addProduct, updateProduct, sampleAction,
-        skuPurchaseAction, completePurchase,
         addPurchaseOrder, updatePurchaseOrderStatus, updatePurchaseOrder,
         addSampleOption, updateSampleOption, updateSampleOptionStatus, deleteSampleOption,
-        addSampleSkuLine, updateSampleSkuLine, deleteSampleSkuLine, updateSkuEvaluation,
+        addSampleSkuLine, updateSampleSkuLine, deleteSampleSkuLine,
         managerDecision,
-        reportSamplingAnomaly,
-        approveSamplingAnomaly,
         refetch,
       }}
     >

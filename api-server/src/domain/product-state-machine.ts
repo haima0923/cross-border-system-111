@@ -7,11 +7,7 @@ export const ALL_PRODUCT_STATUSES = [
   "manager_reviewing",
   "pending_sampling",
   "sampling_collection",
-  "sampling_ready",
   "sampling_review_submitted",
-  "sampling",
-  "sample_arrived",
-  "sample_reviewing",
   "sample_reviewed",
   "pending_purchase",
   "purchased",
@@ -50,7 +46,6 @@ export const PRODUCT_ACTIONS = [
   "manager_return",
   "start_sampling_collection",
   "start",
-  "submit_sampling_ready",
   "submit_sampling_review",
   "arrive",
   "start_review",
@@ -79,6 +74,7 @@ export const PRODUCT_ACTIONS = [
   "acknowledge_rejection",
   "acknowledge_supplier_change",
   "resubmit_supplier",
+  "resubmit_screening",
   "manager_decision_reject",
   "manager_decision_approve",
 ] as const;
@@ -110,13 +106,13 @@ const TRANSITIONS: Record<ProductAction, TransitionRule> = {
   manager_return: { allowedFrom: ["screening_submitted", "manager_reviewing"], to: "returned" },
 
   start_sampling_collection: { allowedFrom: ["pending_sampling"], to: "sampling_collection" },
-  start: { allowedFrom: ["pending_sampling"], to: "sampling" },
-  submit_sampling_ready: { allowedFrom: ["sampling_collection"], to: "sampling_ready" },
-  arrive: { allowedFrom: ["sampling"], to: "sample_arrived" },
+  start: { allowedFrom: ["pending_sampling"], to: "pending_sampling" },
+  submit_sampling_review: { allowedFrom: ["sampling_collection"], to: "sampling_review_submitted" },
+
+  arrive: { allowedFrom: ["pending_sampling"], to: "sample_arrived" },
   start_review: { allowedFrom: ["sample_arrived"], to: "sample_reviewing" },
   cancel_review: { allowedFrom: ["sample_reviewing"], to: "sample_arrived" },
   submit: { allowedFrom: ["sample_reviewing"], to: "sample_reviewed" },
-  submit_sampling_review: { allowedFrom: ["sampling_ready"], to: "sampling_review_submitted" },
 
   approve_purchase: { allowedFrom: ["sample_reviewed"], to: "pending_purchase" },
   change_supplier: { allowedFrom: ["sample_reviewed"], to: "supplier_change_requested" },
@@ -146,6 +142,7 @@ const TRANSITIONS: Record<ProductAction, TransitionRule> = {
   acknowledge_supplier_change: { allowedFrom: ["supplier_change_requested"], to: "supplier_changing" },
   resubmit_supplier: { allowedFrom: ["supplier_changing"], to: "pending_sampling" },
 
+  resubmit_screening: { allowedFrom: ["completed", "rejected", "returned"], to: "screening_submitted" },
   manager_decision_reject: { allowedFrom: ["sample_reviewed", "sampling_review_submitted"], to: "rejected_unconfirmed" },
   manager_decision_approve: { allowedFrom: ["sample_reviewed", "sampling_review_submitted"], to: "pending_purchase" },
 };
@@ -166,4 +163,3 @@ export function resolveNextStatus(from: ProductFromStatus, action: ProductAction
 export function assertTransitOrThrow(from: ProductFromStatus, action: ProductAction) {
   return resolveNextStatus(from, action);
 }
-

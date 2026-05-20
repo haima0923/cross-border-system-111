@@ -83,6 +83,7 @@ export const productsTable = pgTable("products", {
   analysisSubmittedAt: timestamp("analysis_submitted_at"),
   screeningSubmittedBy: text("screening_submitted_by"),
   screeningSubmittedAt: timestamp("screening_submitted_at"),
+  resubmitted: boolean("resubmitted").default(false),
   managerReviewedBy: text("manager_reviewed_by"),
   managerReviewedAt: timestamp("manager_reviewed_at"),
   managerComment: text("manager_comment"),

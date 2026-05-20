@@ -8,6 +8,7 @@ export const sampleOptionsTable = pgTable("sample_options", {
   optionLabel: text("option_label"),
   supplierName: text("supplier_name"),
   link1688: text("link_1688"),
+  shippingCost: numeric("shipping_cost"),
   contactStatus: text("contact_status"),
   material: text("material"),
   packagingNote: text("packaging_note"),

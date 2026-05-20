@@ -1,4 +1,5 @@
 import { Router, type IRouter } from "express";
+import { authenticate } from "../middleware/authenticate";
 import { db } from "@workspace/db";
 import { productsTable, sampleOptionsTable, sampleSkuLinesTable } from "@workspace/db/schema";
 import { eq, and, inArray } from "drizzle-orm";
@@ -182,7 +183,7 @@ function serializeProduct(p: Record<string, unknown>) {
   };
 }
 
-router.get("/products", async (req, res) => {
+router.get("/products", authenticate, async (req, res) => {
   const query = ListProductsQueryParams.safeParse(req.query);
   const rows = await db.select().from(productsTable);
   let filtered = rows;
@@ -193,6 +194,15 @@ router.get("/products", async (req, res) => {
     filtered = filtered.filter(
       (r) => r.submitterName === query.data.submittedBy,
     );
+  }
+  // 数据权限过滤：product_specialist只能看到自己的产品
+  const userRole = req.user?.role;
+  const userEmployeeId = req.user?.employeeId;
+  if (userRole === "product_specialist" && userEmployeeId) {
+    filtered = filtered.filter((r) => {
+      const row = r as Record<string, unknown>;
+      return row.employeeId === userEmployeeId;
+    });
   }
   res.json(filtered.map((r) => serializeProduct(r as Record<string, unknown>)));
 });
@@ -413,6 +423,16 @@ router.put("/products/:id", async (req, res) => {
       case "submit_analysis":
         updateAction = "update_submit_analysis";
         break;
+      case "save_draft":
+        // 保存草稿回到待处理区，状态设为returned
+        updateAction = null;
+        newStatus = "returned";
+        break;
+      case "resubmit_screening":
+        // 重新提交初筛：状态直接设为screening_submitted，不走状态机
+        updateAction = null;
+        newStatus = "screening_submitted";
+        break;
       case "draft":
         updateAction = "update_draft";
         break;
@@ -436,7 +456,7 @@ router.put("/products/:id", async (req, res) => {
   const historyLog = addHistory(
     (existing.historyLog as unknown[]) || [],
     data.submitterName || existing.submitterName,
-    data.action === "submit_analysis" ? "提交分析" : data.action === "pending_info" ? "标记待补充" : "更新信息",
+    data.action === "submit_analysis" ? "提交分析" : data.action === "pending_info" ? "标记待补充" : data.action === "resubmit_screening" ? "重新提交初筛" : "更新信息",
     existing.status,
     newStatus,
   );
@@ -445,6 +465,9 @@ router.put("/products/:id", async (req, res) => {
     .update(productsTable)
     .set({
       status: newStatus,
+      resubmitted: data.action === "resubmit_screening" ? true : (existing.resubmitted || false),
+      screeningSubmittedAt: data.action === "resubmit_screening" ? now : existing.screeningSubmittedAt,
+      screeningSubmittedBy: data.action === "resubmit_screening" ? (data.submitterName || existing.submitterName) : existing.screeningSubmittedBy,
       submitterName: data.submitterName ?? existing.submitterName,
       employeeId: data.employeeId ?? existing.employeeId,
       department: data.department ?? existing.department,
@@ -576,7 +599,8 @@ router.post("/products/:id/submit-screening", async (req, res) => {
   const now = new Date();
   let nextStatus: string;
   try {
-    nextStatus = assertTransitOrThrow(existing.status as ProductFromStatus, "submit_screening");
+    const action = (existing.status === "completed" || existing.status === "rejected" || existing.status === "returned") ? "resubmit_screening" : "submit_screening";
+    nextStatus = assertTransitOrThrow(existing.status as ProductFromStatus, action);
   } catch (err) {
     res.status(400).json({ error: (err as Error).message });
     return;
@@ -590,6 +614,9 @@ router.post("/products/:id/submit-screening", async (req, res) => {
     body.data.employeeNote,
   );
 
+  // 如果是重新提交，设置resubmitted标记
+  const resubmittedFlag = (existing.status === "completed" || existing.status === "rejected" || existing.status === "returned");
+
   await db
     .update(productsTable)
     .set({
@@ -597,6 +624,7 @@ router.post("/products/:id/submit-screening", async (req, res) => {
       employeeNote: body.data.employeeNote,
       screeningSubmittedBy: body.data.submitterName,
       screeningSubmittedAt: now,
+      resubmitted: resubmittedFlag ? true : existing.resubmitted,
       updatedAt: now,
       historyLog,
     })
@@ -707,7 +735,7 @@ const MANAGER_ONLY_SAMPLE_ACTIONS = new Set([
 ]);
 
 router.post("/products/:id/sample-action", async (req, res) => {
-  const { action, ...data } = req.body as Record<string, unknown>;
+  const { action, skuLineId, ...data } = req.body as Record<string, unknown>;
   const operatorName = req.user!.name;
   const operatorRole = req.user!.role;
 
@@ -741,6 +769,13 @@ router.post("/products/:id/sample-action", async (req, res) => {
 
   switch (action) {
     // ── 采样阶段 ──────────────────────────────────────────────────────────────
+    case "start":
+      // pending_sampling → sampling: 员工确认采样，联系供应商
+      transitionAction = "start";
+      actionLabel = "确认采样（联系供应商）";
+      updates.samplingStartedBy = operatorName;
+      updates.samplingStartedAt = now;
+      break;
     case "start_sampling_collection":
       // pending_sampling → sampling_collection: 员工开始采样建档（多方案模式）
       transitionAction = "start_sampling_collection";
@@ -748,29 +783,16 @@ router.post("/products/:id/sample-action", async (req, res) => {
       updates.samplingStartedBy = operatorName;
       updates.samplingStartedAt = now;
       break;
-    case "start":
-      // pending_sampling → sampling: 员工确认采样，联系供应商（旧流程兼容）
-      transitionAction = "start";
-      actionLabel = "确认采样（联系供应商）";
-      updates.samplingStartedBy = operatorName;
-      updates.samplingStartedAt = now;
-      break;
-    case "submit_sampling_ready":
-      // sampling_collection → sampling_ready: 所有方案到货，提交进入验样阶段
-      transitionAction = "submit_sampling_ready";
-      actionLabel = "提交进入验样";
-      break;
     case "submit_sampling_review":
-      // sampling_ready → sampling_review_submitted: 员工提交验样评价结果
+      // sampling_collection → sampling_review_submitted: 员工提交所有方案验样评价
       transitionAction = "submit_sampling_review";
+      // 校验方案数量至少3个
+      const optionCount = (await db.select().from(sampleOptionsTable).where(eq(sampleOptionsTable.productId, req.params.id))).length;
+      if (optionCount < 3) {
+        res.status(400).json({ error: "请至少添加3个采样方案后再提交" });
+        return;
+      }
       actionLabel = "提交验样结果";
-      updates.sampleConsistentWithImage = data.sampleConsistentWithImage ?? null;
-      updates.sampleMaterialEval = data.sampleMaterialEval ?? null;
-      updates.sampleWorkmanshipEval = data.sampleWorkmanshipEval ?? null;
-      updates.sampleFunctionEval = data.sampleFunctionEval ?? null;
-      updates.sampleRemarks = data.sampleRemarks ?? null;
-      updates.sampleReviewedBy = operatorName;
-      updates.sampleReviewedAt = now;
       break;
     case "arrive":
       // sampling → sample_arrived: 员工标记样品已到，此前禁止填写评价
@@ -874,12 +896,20 @@ router.post("/products/:id/sample-action", async (req, res) => {
       transitionAction = "confirm_order";
       actionLabel = "确认已下单";
       updates.orderedAt = now;
+      // 更新SKU的purchaseStatus为ordered
+      if (skuLineId) {
+        await db.update(sampleSkuLinesTable).set({ purchaseStatus: "ordered", orderedAt: now, updatedAt: now }).where(eq(sampleSkuLinesTable.id, skuLineId as string));
+      }
       break;
     case "mark_arrived":
       // ordered → goods_arrived: 员工标记货物已到
       transitionAction = "mark_arrived";
       actionLabel = "标记货物已到";
       updates.goodsArrivedAt = now;
+      // 更新SKU的purchaseStatus为arrived
+      if (skuLineId) {
+        await db.update(sampleSkuLinesTable).set({ purchaseStatus: "arrived", arrivedAt: now, updatedAt: now }).where(eq(sampleSkuLinesTable.id, skuLineId as string));
+      }
       break;
     // ── 验货流程（新流程：goods_arrived → inspecting → 正常/异常分支）─────────────
     case "start_inspection":
@@ -887,6 +917,10 @@ router.post("/products/:id/sample-action", async (req, res) => {
       transitionAction = "start_inspection";
       actionLabel = "开始验货";
       updates.inspectingStartedAt = now;
+      // 更新SKU的purchaseStatus为inspecting
+      if (skuLineId) {
+        await db.update(sampleSkuLinesTable).set({ purchaseStatus: "inspecting", inspectingStartedAt: now, updatedAt: now }).where(eq(sampleSkuLinesTable.id, skuLineId as string));
+      }
       break;
     case "start_anomaly_report":
       // inspecting → inspecting_anomaly_entry: 员工选择"发现异常"路径（持久化，刷新后表单保留）
@@ -904,6 +938,10 @@ router.post("/products/:id/sample-action", async (req, res) => {
       actionLabel = "验货通过";
       updates.goodsInspectedAt = now;
       updates.goodsInspectionNote = data.goodsInspectionNote ?? null;
+      // 更新SKU的purchaseStatus为passed
+      if (skuLineId) {
+        await db.update(sampleSkuLinesTable).set({ purchaseStatus: "passed", passedAt: now, updatedAt: now }).where(eq(sampleSkuLinesTable.id, skuLineId as string));
+      }
       break;
     case "report_anomaly":
       // inspecting → inspection_anomaly: 员工报告异常，填写验货异常表单
@@ -915,6 +953,16 @@ router.post("/products/:id/sample-action", async (req, res) => {
       updates.anomalyNote = data.anomalyNote ?? null;
       updates.anomalyReportedAt = now;
       updates.anomalyReportedBy = operatorName;
+      // 更新SKU的purchaseStatus为anomaly_reported
+      if (skuLineId) {
+        await db.update(sampleSkuLinesTable).set({ 
+          purchaseStatus: "anomaly_reported", 
+          anomalyType: data.anomalyTypes as string || null,
+          anomalyNote: data.anomalyNote as string || null,
+          anomalyReportedAt: now,
+          updatedAt: now 
+        }).where(eq(sampleSkuLinesTable.id, skuLineId as string));
+      }
       break;
     case "acknowledge_anomaly":
       // inspection_anomaly → anomaly_handling: 管理层确认异常并选择处理方案
@@ -931,6 +979,10 @@ router.post("/products/:id/sample-action", async (req, res) => {
       actionLabel = "确认异常处理完毕";
       updates.anomalyResolvedAt = now;
       updates.anomalyResolvedBy = operatorName;
+      // 更新SKU的purchaseStatus为anomaly_resolved
+      if (skuLineId) {
+        await db.update(sampleSkuLinesTable).set({ purchaseStatus: "anomaly_resolved", anomalyResolvedAt: now, updatedAt: now }).where(eq(sampleSkuLinesTable.id, skuLineId as string));
+      }
       break;
     case "accept_goods":
       // anomaly_resolved → completed: 管理层决定接受入库
@@ -1026,6 +1078,20 @@ router.post("/products/:id/sample-action", async (req, res) => {
       res.status(400).json({ error: "Invalid action" });
       return;
   }
+
+  // ── 构造操作日志备注（仅 submit_sampling_review 时需要汇总信息）
+  let _logNote: string | undefined = (data.comment as string) ?? undefined;
+  if (action === 'submit_sampling_review') {
+    // 查询该产品的方案数量和异常SKU数量
+    const opts = await db.select().from(sampleOptionsTable).where(eq(sampleOptionsTable.productId, existing.id));
+    let anomalyCount = 0;
+    for (const opt of opts) {
+      const skus = await db.select().from(sampleSkuLinesTable).where(eq(sampleSkuLinesTable.sampleOptionId, opt.id));
+      anomalyCount += skus.filter((s: any) => s.anomalyType != null).length;
+    }
+    _logNote = opts.length + "个方案，" + anomalyCount + "个异常SKU";
+  }
+
   try {
     newStatus = assertTransitOrThrow(existing.status as ProductFromStatus, transitionAction);
   } catch (err) {
@@ -1047,7 +1113,7 @@ router.post("/products/:id/sample-action", async (req, res) => {
     actionLabel,
     existing.status,
     newStatus,
-    (data.comment as string) ?? undefined,
+    _logNote,
   );
 
   await db
@@ -1148,6 +1214,13 @@ router.post("/products/:id/manager-decision", async (req, res) => {
     return;
   }
 
+  // 构造 approve 的 note，记录选中的方案信息
+  const selectedOptionsForLog = await db.select({ id: sampleOptionsTable.id, label: sampleOptionsTable.optionLabel })
+    .from(sampleOptionsTable)
+    .where(inArray(sampleOptionsTable.id, selectedOptionIdsList));
+  const approveNote = "选择方案：" + selectedOptionsForLog.map(o => o.label || "方案" + (selectedOptionsForLog.indexOf(o) + 1)).join("、");
+  const approveActionLabel = "管理层同意采购";
+
   await db.transaction(async (tx) => {
     // 1. 获取该产品所有option的ID，然后清零所有SKU的 manager_selected 和 purchase_quantity
     const allOptions = await tx.select({ id: sampleOptionsTable.id })
@@ -1196,6 +1269,19 @@ router.post("/products/:id/manager-decision", async (req, res) => {
       })
       .where(eq(productsTable.id, id));
   });
+
+  // 5. 写入 historyLog，记录选中的方案信息
+  const approveHistoryLog = addHistory(
+    (product.historyLog as unknown[]) || [],
+    operatorName,
+    approveActionLabel,
+    product.status,
+    nextStatus,
+    approveNote,
+  );
+  await db.update(productsTable)
+    .set({ historyLog: approveHistoryLog })
+    .where(eq(productsTable.id, id));
 
   const [updated] = await db.select().from(productsTable).where(eq(productsTable.id, id));
   res.json(serializeProduct(updated as Record<string, unknown>));

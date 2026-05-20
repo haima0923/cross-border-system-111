@@ -12,10 +12,12 @@ function serializeSampleOption(r: Record<string, unknown>) {
     sampleReviewScore: r.sampleReviewScore != null ? Number(r.sampleReviewScore) : null,
     samplingStartedAt: r.samplingStartedAt ? (r.samplingStartedAt as Date).toISOString() : null,
     sampleArrivedAt: r.sampleArrivedAt ? (r.sampleArrivedAt as Date).toISOString() : null,
+    sampleReviewStartedAt: r.sampleReviewStartedAt ? (r.sampleReviewStartedAt as Date).toISOString() : null,
     sampleReviewedAt: r.sampleReviewedAt ? (r.sampleReviewedAt as Date).toISOString() : null,
     selectedAt: r.selectedAt ? (r.selectedAt as Date).toISOString() : null,
     createdAt: r.createdAt ? (r.createdAt as Date).toISOString() : null,
     updatedAt: r.updatedAt ? (r.updatedAt as Date).toISOString() : null,
+    shippingCost: r.shippingCost != null ? Number(r.shippingCost) : null,
   };
 }
 
@@ -36,7 +38,7 @@ router.post("/sample-options", async (req, res) => {
   const now = new Date();
   const id = randomUUID();
   const { productId, supplierName, link1688, contactStatus, material, packagingNote,
-          remarks, optionLabel, createdBy, status } = req.body;
+          remarks, optionLabel, createdBy, status, shippingCost } = req.body;
 
   if (!productId) { res.status(400).json({ error: "productId required" }); return; }
 
@@ -51,6 +53,7 @@ router.post("/sample-options", async (req, res) => {
     material: material || null,
     packagingNote: packagingNote || null,
     remarks: remarks || null,
+    shippingCost: shippingCost != null ? String(shippingCost) : null,
     createdBy: createdBy || null,
     createdAt: now,
     updatedAt: now,
@@ -71,6 +74,7 @@ router.put("/sample-options/:id", async (req, res) => {
     sampleReviewedBy, sampleReviewedAt,
     samplingStartedBy, samplingStartedAt, sampleArrivedAt,
     selectionNote, selectedBy, selectedAt,
+    shippingCost,
   } = req.body;
 
   const updates: Record<string, unknown> = { updatedAt: now };
@@ -97,6 +101,7 @@ router.put("/sample-options/:id", async (req, res) => {
   if (selectionNote !== undefined) updates.selectionNote = selectionNote;
   if (selectedBy !== undefined) updates.selectedBy = selectedBy;
   if (selectedAt !== undefined) updates.selectedAt = selectedAt ? new Date(selectedAt) : null;
+  if (shippingCost !== undefined) updates.shippingCost = shippingCost != null ? String(shippingCost) : null;
 
   await db.update(sampleOptionsTable).set(updates as any).where(eq(sampleOptionsTable.id, id));
   const [updated] = await db.select().from(sampleOptionsTable).where(eq(sampleOptionsTable.id, id));
@@ -131,8 +136,20 @@ router.patch("/sample-options/:id/status", async (req, res) => {
   }
 
   const now = new Date();
+  const updates: Record<string, unknown> = { sampleOrderStatus, updatedAt: now };
+  
+  // 当状态从 arrived 改为 evaluating 时，记录评价开始时间
+  if (sampleOrderStatus === "evaluating") {
+    updates.sampleReviewStartedAt = now;
+  }
+  
+  // 当状态设为 evaluated 时，记录评价完成时间
+  if (sampleOrderStatus === "evaluated") {
+    updates.sampleReviewedAt = now;
+  }
+  
   await db.update(sampleOptionsTable)
-    .set({ sampleOrderStatus, updatedAt: now })
+    .set(updates as any)
     .where(eq(sampleOptionsTable.id, id));
 
   const [updated] = await db.select().from(sampleOptionsTable).where(eq(sampleOptionsTable.id, id));

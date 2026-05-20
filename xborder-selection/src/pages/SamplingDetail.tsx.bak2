@@ -170,9 +170,6 @@ export default function SamplingDetail() {
   const [newOptionSupplier, setNewOptionSupplier] = useState('');
   const [newOptionLink, setNewOptionLink] = useState('');
   const [newOptionShippingCost, setNewOptionShippingCost] = useState('');
-  // 运费编辑状态（optionId -> shippingCost）
-  const [editingShippingCost, setEditingShippingCost] = useState<Record<string, string>>({});
-  const [savingShippingCost, setSavingShippingCost] = useState<Record<string, boolean>>({});
   const [addingOption, setAddingOption] = useState(false);
 
   // Adding SKU to option
@@ -198,17 +195,6 @@ export default function SamplingDetail() {
 
   // Status change confirmation
   const [statusConfirm, setStatusConfirm] = useState<{ optionId: string; status: string } | null>(null);
-
-  // 本地编辑状态管理 - 用于装箱数和备注输入，避免中文输入法卡顿
-  const [localEdits, setLocalEdits] = useState<Record<string, { packingQuantity?: string; skuRemarks?: string }>>({});
-
-  // SKU排序兜底 - 按sampleOptionId升序，按createdAt升序
-  const sortedSkuLines = useMemo(() => 
-    [...sampleSkuLines].sort((a, b) => {
-      if (a.sampleOptionId !== b.sampleOptionId) 
-        return a.sampleOptionId.localeCompare(b.sampleOptionId);
-      return new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
-    }), [sampleSkuLines]);
 
   const product = products.find(p => p.id === id);
   if (!product) {
@@ -286,25 +272,6 @@ export default function SamplingDetail() {
       alert('添加方案失败，请重试');
     } finally {
       setAddingOption(false);
-    }
-  };
-
-  // 保存运费编辑
-  const handleSaveShippingCost = async (optId: string) => {
-    const newCost = editingShippingCost[optId];
-    if (newCost === undefined) return;
-    setSavingShippingCost(prev => ({ ...prev, [optId]: true }));
-    try {
-      const cost = newCost.trim() === '' ? null : Number(newCost);
-      await updateSampleOption(optId, { shippingCost: cost });
-      const n = { ...editingShippingCost };
-      delete n[optId];
-      setEditingShippingCost(n);
-    } catch (err) {
-      console.error('Failed to save shipping cost:', err);
-      alert('保存运费失败');
-    } finally {
-      setSavingShippingCost(prev => ({ ...prev, [optId]: false }));
     }
   };
 
@@ -536,7 +503,7 @@ export default function SamplingDetail() {
       {/* Sample Option Cards */}
       {myOptions.map((opt, idx) => {
         const color = CARD_COLORS[idx % CARD_COLORS.length];
-        const optSkus = sortedSkuLines.filter(s => s.sampleOptionId === opt.id);
+        const optSkus = sampleSkuLines.filter(s => s.sampleOptionId === opt.id);
         const orderStatus = opt.sampleOrderStatus || 'pending';
         const statusCfg = ORDER_STATUS_CONFIG[orderStatus];
         const isEvaluating = orderStatus === 'evaluating';
@@ -588,45 +555,10 @@ export default function SamplingDetail() {
                       采购链接
                     </a>
                   )}
-                  {/* 运费显示/编辑 */}
+                  {/* 运费显示 */}
                   {opt.shippingCost != null && (
-                    <p className="text-sm text-slate-500 mt-1 flex items-center gap-1">
-                      运费：
-                      {(opt.sampleOrderStatus === 'pending' && !isReadOnly) ? (
-                        editingShippingCost[opt.id] !== undefined ? (
-                          <>
-                            <input
-                              type="number"
-                              value={editingShippingCost[opt.id]}
-                              onChange={e => setEditingShippingCost(prev => ({ ...prev, [opt.id]: e.target.value }))}
-                              className="w-20 text-sm border border-slate-300 rounded px-2 py-0.5 focus:outline-none focus:ring-1 focus:ring-primary/50"
-                              placeholder="0.00"
-                            />
-                            <button
-                              onClick={() => handleSaveShippingCost(opt.id)}
-                              disabled={savingShippingCost[opt.id]}
-                              className="text-xs bg-primary text-white px-2 py-0.5 rounded hover:bg-primary/90 disabled:opacity-40"
-                            >
-                              {savingShippingCost[opt.id] ? '保存中' : '保存'}
-                            </button>
-                            <button
-                              onClick={() => { const n = {...editingShippingCost}; delete n[opt.id]; setEditingShippingCost(n); }}
-                              className="text-xs text-slate-400 hover:text-slate-600 px-1"
-                            >
-                              取消
-                            </button>
-                          </>
-                        ) : (
-                          <span
-                            className="font-semibold text-slate-700 cursor-pointer hover:text-primary"
-                            onClick={() => setEditingShippingCost(prev => ({ ...prev, [opt.id]: String(opt.shippingCost ?? '')}))}
-                          >
-                            ¥{Number(opt.shippingCost).toFixed(2)}
-                          </span>
-                        )
-                      ) : (
-                        <span className="font-semibold text-slate-700">¥{Number(opt.shippingCost).toFixed(2)}</span>
-                      )}
+                    <p className="text-sm text-slate-500 mt-1">
+                      运费：<span className="font-semibold text-slate-700">¥{Number(opt.shippingCost).toFixed(2)}</span>
                     </p>
                   )}
                 </div>
@@ -879,24 +811,8 @@ export default function SamplingDetail() {
                                               <input
                                                 type="number"
                                                 min="1"
-                                                value={localEdits[sku.id]?.packingQuantity ?? (sku.packingQuantity != null ? String(sku.packingQuantity) : '')}
-                                                onChange={e => {
-                                                  const val = e.target.value;
-                                                  setLocalEdits(prev => ({ ...prev, [sku.id]: { ...prev[sku.id], packingQuantity: val } }));
-                                                }}
-                                                onBlur={e => {
-                                                  const val = e.target.value.trim();
-                                                  const num = val === '' ? undefined : (parseInt(val) || 0);
-                                                  updateSkuEvaluation(sku.id, { packingQuantity: num });
-                                                  setLocalEdits(prev => {
-                                                    const next = { ...prev };
-                                                    if (next[sku.id]) {
-                                                      delete next[sku.id].packingQuantity;
-                                                      if (Object.keys(next[sku.id]).length === 0) delete next[sku.id];
-                                                    }
-                                                    return next;
-                                                  });
-                                                }}
+                                                value={sku.packingQuantity || ''}
+                                                onChange={e => updateSkuEvaluation(sku.id, { packingQuantity: parseInt(e.target.value) || 0 })}
                                                 disabled={isSkuReadOnly}
                                                 placeholder={isSkuReadOnly ? '' : '每箱数量'}
                                                 className="w-full px-3 py-1.5 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-1 focus:ring-primary/50 disabled:bg-slate-100 disabled:text-slate-400"
@@ -907,23 +823,8 @@ export default function SamplingDetail() {
                                           <div>
                                             <label className="text-xs text-slate-500">备注</label>
                                             <textarea
-                                              value={localEdits[sku.id]?.skuRemarks ?? (sku.skuRemarks || '')}
-                                              onChange={e => {
-                                                const val = e.target.value;
-                                                setLocalEdits(prev => ({ ...prev, [sku.id]: { ...prev[sku.id], skuRemarks: val } }));
-                                              }}
-                                              onBlur={e => {
-                                                const val = e.target.value;
-                                                updateSkuEvaluation(sku.id, { skuRemarks: val });
-                                                setLocalEdits(prev => {
-                                                  const next = { ...prev };
-                                                  if (next[sku.id]) {
-                                                    delete next[sku.id].skuRemarks;
-                                                    if (Object.keys(next[sku.id]).length === 0) delete next[sku.id];
-                                                  }
-                                                  return next;
-                                                });
-                                              }}
+                                              value={sku.skuRemarks || ''}
+                                              onChange={e => updateSkuEvaluation(sku.id, { skuRemarks: e.target.value })}
                                               readOnly={isSkuReadOnly}
                                               rows={2}
                                               placeholder={isSkuReadOnly ? '' : '验样备注...'}

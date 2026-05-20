@@ -102,25 +102,7 @@ export default function Workbench() {
     MAIN_GROUPS.forEach(g => { init[g.id] = localStorage.getItem(groupViewedKey(g.id)); });
     return init;
   });
-  
-// 产品级未读标识
-  const productViewedKey = (productId: string) => 'wb_pv_' + currentUser.id + '_' + productId;
-  const [productLastViewed, setProductLastViewed] = useState<Record<string, string | null>>(() => {
-    const init: Record<string, string | null> = {};
-    products.forEach(p => { init[p.id] = localStorage.getItem(productViewedKey(p.id)); });
-    return init;
-  });
-  const markProductViewed = (productId: string) => {
-    const now = new Date().toISOString();
-    localStorage.setItem(productViewedKey(productId), now);
-    setProductLastViewed(prev => ({ ...prev, [productId]: now }));
-  };
-  const isProductUnread = (product: any) => {
-    const viewed = productLastViewed[product.id];
-    if (!viewed) return true;
-    return product.updatedAt > viewed;
-  };
-const markGroupViewed = (groupId: string) => {
+  const markGroupViewed = (groupId: string) => {
     const now = new Date().toISOString();
     localStorage.setItem(groupViewedKey(groupId), now);
     setGroupLastViewed(prev => ({ ...prev, [groupId]: now }));
@@ -369,7 +351,7 @@ const markGroupViewed = (groupId: string) => {
                     return (
                       <div
                         key={product.id}
-                        onClick={() => { markProductViewed(product.id); setLocation(getCardPath(product.status, product.id)); }}
+                        onClick={() => setLocation(getCardPath(product.status, product.id))}
                         className="bg-white p-4 rounded-xl shadow-sm border border-slate-200 hover:border-primary/40 hover:shadow-md transition-all cursor-pointer group"
                       >
                         <div className="flex justify-between items-start mb-2">
@@ -385,8 +367,8 @@ const markGroupViewed = (groupId: string) => {
                           </span>
                         </div>
                         <div className="flex items-start gap-2 mb-1">
-                          <h4 className="font-bold text-slate-800 group-hover:text-primary transition-colors text-sm leading-snug line-clamp-2 flex items-center gap-1.5">
-                            <span className="flex-1">{product.productName}</span>{isProductUnread(product) && <span className="w-2 h-2 rounded-full bg-red-500 shrink-0" title="有新更新" />}
+                          <h4 className="font-bold text-slate-800 group-hover:text-primary transition-colors text-sm leading-snug line-clamp-2 flex-1">
+                            {product.productName}
                           </h4>
                           <ProductImage
                             hostedImageUrl={product.hostedImageUrl}

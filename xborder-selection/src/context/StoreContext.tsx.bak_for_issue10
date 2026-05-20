@@ -211,26 +211,21 @@ export function StoreProvider({
   const [loading, setLoading] = useState(true);
 
   // 员工提交采样异常
-  // 报告采样异常 - 优化：局部更新而非全量refetch
   const reportSamplingAnomaly = async (skuLineId: string, data: { anomalyType: string; anomalyNote: string; anomalyImages?: string[] }): Promise<void> => {
     await apiFetch(API + '/sample-sku-lines/' + skuLineId + '/sampling-anomaly', {
       method: 'POST',
       body: JSON.stringify({ ...data, operator: currentUser.name }),
     });
-    // 局部更新：获取最新SKU数据并更新状态
-    const updatedSku = await apiFetch(API + '/sample-sku-lines/' + skuLineId);
-    setSampleSkuLines(prev => prev.map(s => s.id === skuLineId ? { ...s, ...updatedSku } : s));
+    await refetch();
   };
 
-  // 经理审批采样异常 - 优化：局部更新而非全量refetch
+  // 经理审批采样异常
   const approveSamplingAnomaly = async (skuLineId: string, data: { approved: boolean; note?: string }): Promise<void> => {
     await apiFetch(API + '/sample-sku-lines/' + skuLineId + '/approve-sampling-anomaly', {
       method: 'POST',
       body: JSON.stringify({ ...data, operator: currentUser.name }),
     });
-    // 局部更新：获取最新SKU数据并更新状态
-    const updatedSku = await apiFetch(API + '/sample-sku-lines/' + skuLineId);
-    setSampleSkuLines(prev => prev.map(s => s.id === skuLineId ? { ...s, ...updatedSku } : s));
+    await refetch();
   };
 
   const refetch = useCallback(async () => {
@@ -260,18 +255,6 @@ export function StoreProvider({
     setLoading(true);
     refetch().finally(() => setLoading(false));
   }, [refetch]);
-
-  // 30秒自动轮询（仅在非loading时触发，避免刷新冲突）
-  useEffect(() => {
-    const intervalId = setInterval(() => {
-      if (!loading) {
-        refetch();
-      }
-    }, 30000);
-    
-    return () => clearInterval(intervalId);
-  }, [loading, refetch]);
-
 
   const logout = async () => {
     await fetch(API + '/auth/logout', {
@@ -396,34 +379,25 @@ export function StoreProvider({
     });
   };
 
-  // SKU级采购动作 - 操作后局部刷新
-  const skuPurchaseAction = async (productId: string, skuLineId: string, action: string, data?: Record<string, unknown>): Promise<void> => {
-    // 执行操作 - 后端返回更新后的产品对象
-    const updatedProduct = await apiFetch(API + "/products/" + productId + "/sample-action", {
-      method: "POST",
-      body: JSON.stringify({ skuLineId, action, ...data }),
-    });
-    // 立即更新产品状态（UI先响应）
-    setProducts(prev => prev.map(p => p.id === productId ? updatedProduct : p));
-    // 并行拉取最新SKU和方案数据（不阻塞返回，后台刷新）
-    Promise.all([
-      apiFetch(API + "/sample-sku-lines"),
-      apiFetch(API + "/sample-options"),
-    ]).then(([skus, opts]) => {
-      setSampleSkuLines(skus);
-      setSampleOptions(opts);
+  // SKU级采购动作
+  const skuPurchaseAction = (productId: string, skuLineId: string, action: string, data?: Record<string, unknown>): Promise<void> => {
+    return apiFetch(API + '/products/' + productId + '/sample-action', {
+      method: 'POST',
+      body: JSON.stringify({ skuLineId, action, data }),
+    }).then(() => {
+      // 成功后刷新数据
+      return refetch();
     });
   };
 
-  // 完成入库（所有SKU验货通过后）- 优化：局部更新而非全量refetch
-  const completePurchase = async (productId: string): Promise<void> => {
-    await apiFetch(API + '/products/' + productId + '/complete-purchase', {
+  // 完成入库（所有SKU验货通过后）
+  const completePurchase = (productId: string): Promise<void> => {
+    return apiFetch(API + '/products/' + productId + '/sample-action', {
       method: 'POST',
-      body: JSON.stringify({}),
+      body: JSON.stringify({ action: 'complete' }),
+    }).then(() => {
+      return refetch();
     });
-    // 局部更新：获取最新产品数据并更新状态
-    const updatedProduct = await apiFetch(API + '/products/' + productId);
-    setProducts(prev => prev.map(p => p.id === productId ? { ...p, ...updatedProduct } : p));
   };
 
   const addPurchaseOrder = (po: Partial<PurchaseOrder>) => {
@@ -540,20 +514,17 @@ export function StoreProvider({
       skuWorkmanshipEval?: string;
       skuFunctionEval?: string;
       skuRemarks?: string;
-      packingQuantity?: number;
     }
-  ): Promise<void> =>
-  {
-    const url = API + '/sample-sku-lines/' + skuLineId + '/evaluation';
-    const updated = await apiFetch(url, {
+  ): Promise<void> => {
+    await apiFetch(API + '/sample-sku-lines/' + skuLineId + '/evaluation', {
       method: 'PUT',
       body: JSON.stringify({ ...evaluation, operator: currentUser?.name || currentUser?.username || 'Anonymous' }),
     });
-    // 只更新对应的SKU行数据，避免全量refetch导致输入卡顿和位置重排
+    // Refetch the SKU line to get updated data
+    const updated = await apiFetch(API + '/sample-sku-lines/' + skuLineId);
     setSampleSkuLines(prev => prev.map(s => s.id === skuLineId ? updated : s));
   };
 
-  // 经理决策 - 优化：局部更新而非全量refetch
   const managerDecision = async (
     productId: string,
     payload: {
@@ -564,14 +535,12 @@ export function StoreProvider({
       comment?: string;
     },
   ): Promise<void> => {
-    const updated = await apiFetch(API + '/products/' + productId + '/manager-decision', {
+    await apiFetch(API + '/products/' + productId + '/manager-decision', {
       method: 'POST',
       body: JSON.stringify(payload),
     });
-    // 局部更新产品数据
-    setProducts(prev => prev.map(p => p.id === productId ? { ...p, ...updated } : p));
+    await refetch();
   };
-
 
   return (
     <StoreContext.Provider

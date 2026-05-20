@@ -206,17 +206,19 @@ export default function AnalysisResult() {
     return () => clearTimeout(timer);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [product?.status, id, analysisRetrying]);
-  
   // 初始化note和highRiskNote（当产品是returned状态时，保留之前填写的值）
   useEffect(() => {
     if (product) {
       if (product.employeeNote) {
-        const parts = product.employeeNote.split("\n\n【高风险说明】");
-        setNote(parts[0] || '');
-        setHighRiskNote(parts[1] || '');
+        const parts = product.employeeNote.split("
+
+【高风险说明】");
+        setNote(parts[0] || "");
+        setHighRiskNote(parts[1] || "");
       }
     }
   }, [product?.id, product?.employeeNote]);
+
 
   if (!product) {
     return (
@@ -283,28 +285,22 @@ export default function AnalysisResult() {
   // 保存草稿（不改变状态）
   const handleSaveDraft = async () => {
     const combinedNote = note
-      ? (highRiskNote ? note + '\n\n【高风险说明】' + highRiskNote : note)
-      : (highRiskNote ? '【高风险说明】' + highRiskNote : product.employeeNote || '');
-    await updateProduct(id, { employeeNote: combinedNote, status: 'save_draft' } as any, '保存草稿', '员工保存修改信息');
-    alert('草稿已保存');
+      ? (highRiskNote ? note + 
+
+【高风险说明】 + highRiskNote : note)
+      : (highRiskNote ? 【高风险说明】 + highRiskNote : product.employeeNote || );
+    await updateProduct(id, { employeeNote: combinedNote } as any, 保存草稿, 员工保存修改信息);
+    alert("草稿已保存");
   };
 
   const handleResubmitAnalysis = async () => {
     const combinedNote = note
-      ? (highRiskNote ? note + '\n\n【高风险说明】' + highRiskNote : note)
-      : (highRiskNote ? '【高风险说明】' + highRiskNote : product.employeeNote || '');
-    // 先保存当前编辑的信息作为草稿，再重新提交分析
-    await updateProduct(id, { employeeNote: combinedNote, status: 'pending_analysis' } as any, '重新提交分析', '员工补充信息后重新提交分析');
-    setLocation('/workbench');
-  };
+  ? (highRiskNote ? note + '
 
-  // 重新提交初筛（用于completed/rejected状态）
-  const handleResubmitToScreening = async () => {
-    const combinedNote = note
-      ? (highRiskNote ? note + '\n\n【高风险说明】' + highRiskNote : note)
-      : (highRiskNote ? '【高风险说明】' + highRiskNote : product.employeeNote || '');
-    await updateProduct(id, { employeeNote: combinedNote, status: 'screening_submitted', resubmitted: true } as any, '重新提交初筛', '员工重新提交初筛');
-    alert('已重新提交初筛，等待经理审批');
+【高风险说明】' + highRiskNote : note)
+  : (highRiskNote ? '【高风险说明】' + highRiskNote : product.employeeNote || '');
+  // 先保存当前编辑的信息作为草稿
+  await updateProduct(id, { employeeNote: combinedNote, status: 'pending_analysis' } as any, '重新提交分析', '员工补充信息后重新提交分析');
     setLocation('/workbench');
   };
 
@@ -770,53 +766,31 @@ export default function AnalysisResult() {
                 )}
 
                 <div className="flex gap-3">
-                  {/* For returned status: show save draft and resubmit analysis buttons */}
-                  {product.status === 'returned' ? (
-                    <>
-                      <button
-                        onClick={handleSaveDraft}
-                        className="flex items-center justify-center gap-2 bg-white border border-slate-300 text-slate-700 px-5 py-3 rounded-xl hover:bg-slate-50 transition-colors font-medium text-sm"
-                      >
-                        保存草稿
-                      </button>
-                      <button
-                        onClick={handleResubmitAnalysis}
-                        className="flex-1 flex items-center justify-center gap-2 py-3 rounded-xl bg-primary text-white font-semibold text-sm hover:bg-primary/90 transition-colors shadow-md shadow-primary/20"
-                      >
-                        <Sparkles size={16} />
-                        重新提交分析
-                      </button>
-                    </>
-                  ) : (
-                    <>
-                      {/* Submit button — handles all three rule conditions */}
-                      <button
-                        disabled={!canSubmit}
-                        onClick={() => {
-                          if (isNotRecommended && confirmStage === 'idle') {
-                            setConfirmStage('confirming');
-                          } else {
-                            handleSubmitScreening();
-                          }
-                        }}
-                        className={`flex-1 flex items-center justify-center gap-2 py-3 rounded-xl font-semibold transition-all shadow-md disabled:opacity-40 disabled:cursor-not-allowed ${
-                          isNotRecommended
-                            ? 'bg-red-600 hover:bg-red-700 text-white shadow-red-600/20'
-                            : 'bg-primary hover:bg-primary/90 text-white shadow-primary/20'
-                        }`}
-                      >
-                        <Send size={18} />
-                        {isNotRecommended ? '我了解风险，仍要提交初筛' : '提交管理层初筛'}
-                      </button>
-                      <button
-                        onClick={handleReturn}
-                        className="flex items-center justify-center gap-2 bg-white border border-slate-200 text-slate-700 px-5 py-3 rounded-xl hover:bg-slate-50 transition-colors font-medium text-sm"
-                      >
-                        <Undo2 size={16} />
-                        退回补充
-                      </button>
-                    </>
-                  )}
+                  {/* Submit button — handles all three rule conditions */}
+                  <button
+                    disabled={!canSubmit}
+                    onClick={() => {
+                      if (isNotRecommended && confirmStage === 'idle') {
+                        setConfirmStage('confirming');
+                      } else {
+                        handleSubmitScreening();
+                      }
+                    }}
+                    className={`flex-1 flex items-center justify-center gap-2 py-3 rounded-xl font-semibold transition-all shadow-md disabled:opacity-40 disabled:cursor-not-allowed ${
+                      isNotRecommended
+                        ? 'bg-red-600 hover:bg-red-700 text-white shadow-red-600/20'
+                        : 'bg-primary hover:bg-primary/90 text-white shadow-primary/20'
+                    }`}
+                  >
+                    <Send size={18} />
+                    {isNotRecommended ? '我了解风险，仍要提交初筛' : '提交管理层初筛'}
+                  </button>
+                  <button
+                    onClick={handleReturn}
+                    className="flex items-center justify-center gap-2 bg-white border border-slate-200 text-slate-700 px-5 py-3 rounded-xl hover:bg-slate-50 transition-colors font-medium text-sm"
+                  >
+                    <Undo2 size={16} /> 退回补充
+                  </button>
                 </div>
               </div>
             </div>
@@ -848,32 +822,6 @@ export default function AnalysisResult() {
             </div>
           )}
 
-
-          {/* ── Completed/Rejected: employee re-submit to screening panel ── */}
-          {isEmployee && (product.status === 'completed' || product.status === 'rejected') && (
-            <div className="rounded-2xl shadow-lg border border-blue-300 overflow-hidden animate-in slide-in-from-bottom-4">
-              <div className="bg-blue-50 px-5 py-4 border-b border-blue-200">
-                <p className="text-sm font-semibold text-blue-800">重新提交初筛</p>
-                <p className="text-xs text-blue-600 mt-0.5">
-                  该产品已结束，可以修改信息后重新提交初筛流程。
-                </p>
-              </div>
-              <div className="bg-white p-5 flex flex-col sm:flex-row gap-3">
-                <button
-                  onClick={() => setLocation('/entry?id=' + product.id)}
-                  className="flex-1 flex items-center justify-center gap-2 py-3 rounded-xl border border-slate-300 bg-white text-slate-700 font-semibold text-sm hover:bg-slate-50 transition-colors">
-                  <RefreshCw size={16} />
-                  修改信息
-                </button>
-                <button
-                  onClick={handleResubmitToScreening}
-                  className="flex-1 flex items-center justify-center gap-2 py-3 rounded-xl bg-primary text-white font-semibold text-sm hover:bg-primary/90 transition-colors shadow-md shadow-primary/20">
-                  <Send size={16} />
-                  重新提交初筛
-                </button>
-              </div>
-            </div>
-          )} 
           {/* Employee note (already submitted) */}
           {product.employeeNote && (
             <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6">

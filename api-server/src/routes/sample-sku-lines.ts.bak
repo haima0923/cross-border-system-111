@@ -1,7 +1,7 @@
 import { Router, type IRouter } from "express";
 import { db } from "@workspace/db";
 import { sampleSkuLinesTable, productsTable, sampleOptionsTable } from "@workspace/db/schema";
-import { eq, asc } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { randomUUID } from "crypto";
 
 const router: IRouter = Router();
@@ -40,7 +40,7 @@ function serializeSkuLine(r: Record<string, unknown>) {
 
 router.get("/sample-sku-lines", async (req, res) => {
   const { sampleOptionId } = req.query as { sampleOptionId?: string };
-  const rows = await db.select().from(sampleSkuLinesTable).orderBy(asc(sampleSkuLinesTable.sampleOptionId), asc(sampleSkuLinesTable.createdAt));
+  const rows = await db.select().from(sampleSkuLinesTable);
   const filtered = sampleOptionId ? rows.filter(r => r.sampleOptionId === sampleOptionId) : rows;
   res.json(filtered.map(r => serializeSkuLine(r as Record<string, unknown>)));
 });
@@ -150,7 +150,6 @@ router.put("/sample-sku-lines/:id/evaluation", async (req, res) => {
     skuWorkmanshipEval,
     skuFunctionEval,
     skuRemarks,
-    packingQuantity,
     operator,
   } = req.body;
 
@@ -166,7 +165,6 @@ router.put("/sample-sku-lines/:id/evaluation", async (req, res) => {
   if (skuWorkmanshipEval !== undefined) updates.skuWorkmanshipEval = skuWorkmanshipEval;
   if (skuFunctionEval !== undefined) updates.skuFunctionEval = skuFunctionEval;
   if (skuRemarks !== undefined) updates.skuRemarks = skuRemarks;
-  if (packingQuantity !== undefined) updates.packingQuantity = packingQuantity;
   await db.update(sampleSkuLinesTable).set(updates as any).where(eq(sampleSkuLinesTable.id, id));
 
   const [updated] = await db.select().from(sampleSkuLinesTable).where(eq(sampleSkuLinesTable.id, id));
@@ -216,7 +214,6 @@ router.post("/sample-sku-lines/:id/sampling-anomaly", async (req, res) => {
         'quality_issue': '质量差',
         'other': '其他',
       };
-      const labels = {damaged:'损坏','color_spec_mismatch':'颜色规格不对',shortage:'缺货',quality_issue:'质量差',other:'其他'};
       const historyLog = [
         ...(product.historyLog as unknown[] || []),
         {
@@ -224,7 +221,7 @@ router.post("/sample-sku-lines/:id/sampling-anomaly", async (req, res) => {
           actor: operator || '未知',
           fromStatus: product.status,
           toStatus: product.status,
-          note: "采样异常 - SKU: " + skuName + ", 类型: " + (labels[anomalyType] || anomalyType) + ", 描述: " + anomalyNote,
+          note: `采样异常 - SKU: ${skuName}, 类型: ${anomalyTypeLabels[anomalyType] || anomalyType}, 描述: ${anomalyNote}`,
           timestamp: now.toISOString(),
         }
       ];
@@ -289,7 +286,7 @@ router.post("/sample-sku-lines/:id/approve-sampling-anomaly", async (req, res) =
           actor: operator || '未知',
           fromStatus: product.status,
           toStatus: product.status,
-          note: (approved ? '审批通过' : '驳回') + " - SKU: " + skuName + (note ? ', 备注: ' + note : ''),
+          note: `${approved ? '审批通过' : '驳回'} - SKU: ${skuName}${note ? ', 备注: ' + note : ''}`,
           timestamp: now.toISOString(),
         }
       ];

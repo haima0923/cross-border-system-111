@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useAppStore } from '@/context/StoreContext';
 import { useLocation } from 'wouter';
 import { StatusBadge } from '@/components/shared/StatusBadge';
@@ -11,6 +11,17 @@ import { ProductImage } from '@/components/shared/ProductImage';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog';
 import { getDecisionSummary, verdictStyles } from '@/lib/decisionUtils';
 
+// 按员工分组的辅助函数
+function groupProductsBySubmitter<T extends { submitterName?: string | null }>(products: T[]): Map<string, T[]> {
+  const map = new Map<string, T[]>();
+  for (const p of products) {
+    const key = p.submitterName || '未知员工';
+    if (!map.has(key)) map.set(key, []);
+    map.get(key)!.push(p);
+  }
+  return map;
+}
+
 export default function ManagerPool() {
   const { products, updateProduct, currentUser, role } = useAppStore();
   const [, setLocation] = useLocation();
@@ -18,6 +29,24 @@ export default function ManagerPool() {
   const [managerComment, setManagerComment] = useState('');
   const [actionType, setActionType] = useState<'approve' | 'reject' | 'return' | null>(null);
   const [filterVerdict, setFilterVerdict] = useState<'all' | 'recommend' | 'caution' | 'reject'>('all');
+
+  // ── 未读提醒逻辑 ──
+  const productViewedKey = (productId: string) => 'mgr_pool_pv_' + currentUser.id + '_' + productId;
+  const [productLastViewed, setProductLastViewed] = useState<Record<string, string | null>>(() => {
+    const init: Record<string, string | null> = {};
+    products.forEach(p => { init[p.id] = localStorage.getItem(productViewedKey(p.id)); });
+    return init;
+  });
+  const markProductViewed = (productId: string) => {
+    const now = new Date().toISOString();
+    localStorage.setItem(productViewedKey(productId), now);
+    setProductLastViewed(prev => ({ ...prev, [productId]: now }));
+  };
+  const isProductUnread = (product: { id: string; updatedAt: string }) => {
+    const viewed = productLastViewed[product.id];
+    if (!viewed) return true;
+    return product.updatedAt > viewed;
+  };
 
   useEffect(() => {
     if (role !== 'product_manager') setLocation('/workbench');
@@ -91,6 +120,27 @@ export default function ManagerPool() {
           <h1 className="text-2xl font-bold text-slate-900">管理层审核池</h1>
           <p className="text-slate-500 mt-1">审核员工提交的选品报告并决定是否进行采样测试</p>
         </div>
+        {/* 未读提醒徽章 */}
+        <div className="flex items-center gap-3">
+          {(() => {
+            const poolUnreadCount = poolProducts.filter(isProductUnread).length;
+            return poolProducts.length > 0 && (
+              <div className="flex items-center gap-1.5 bg-red-50 border border-red-200 rounded-full px-3 py-1.5">
+                <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse" />
+                <span className="text-xs font-medium text-red-700">初筛待审核 {poolProducts.length}{poolUnreadCount > 0 ? ' (' + poolUnreadCount + '条新)' : ''}</span>
+              </div>
+            );
+          })()}
+          {(() => {
+            const sampleUnreadCount = sampleProducts.filter(isProductUnread).length;
+            return sampleProducts.length > 0 && (
+              <div className="flex items-center gap-1.5 bg-violet-50 border border-violet-200 rounded-full px-3 py-1.5">
+                <span className="w-2 h-2 rounded-full bg-violet-500 animate-pulse" />
+                <span className="text-xs font-medium text-violet-700">待验样审批 {sampleProducts.length}{sampleUnreadCount > 0 ? ' (' + sampleUnreadCount + '条新)' : ''}</span>
+              </div>
+            );
+          })()}
+        </div>
       </div>
 
       {/* ─── Section 1: Initial screening ─── */}
@@ -118,159 +168,195 @@ export default function ManagerPool() {
           ))}
         </div>
 
-        <div className="space-y-3">
-          {filteredProducts.length === 0 ? (
-            <div className="bg-white rounded-2xl border border-slate-200 px-6 py-12 text-center text-slate-400">
-              目前没有符合条件的产品
-            </div>
-          ) : filteredProducts.map(product => {
-            const decision = getDecisionSummary(product);
-            const vstyle = verdictStyles[decision.verdict];
-            const margin = (product.grossMargin ?? 0) * 100;
-            const score = product.aiCompetitiveness ?? 0;
+        {/* 按员工分组显示 */}
+        {filteredProducts.length === 0 ? (
+          <div className="bg-white rounded-2xl border border-slate-200 px-6 py-12 text-center text-slate-400">
+            目前没有符合条件的产品
+          </div>
+        ) : (() => {
+          const grouped = groupProductsBySubmitter(filteredProducts);
+          return Array.from(grouped.entries()).map(([submitter, groupedProducts]) => (
+            <div key={submitter} className="mb-6">
+              <div className="flex items-center gap-2 mb-3 px-1">
+                <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider">员工:</span>
+                <span className="text-sm font-bold text-primary">{submitter}</span>
+                <span className="bg-primary/10 text-primary text-xs font-medium px-2 py-0.5 rounded-full">
+                  {groupedProducts.length}
+                </span>
+              </div>
+              <div className="space-y-3">
+                {groupedProducts.map(product => {
+                  const decision = getDecisionSummary(product);
+                  const vstyle = verdictStyles[decision.verdict];
+                  const margin = (product.grossMargin ?? 0) * 100;
+                  const score = product.aiCompetitiveness ?? 0;
 
-            return (
-              <div
-                key={product.id}
-                className="bg-white rounded-2xl border border-slate-200 shadow-sm hover:shadow-md hover:border-slate-300 transition-all overflow-hidden"
-              >
-                <div className="flex items-stretch">
-                  {/* Thumbnail */}
-                  <div
-                    className="w-28 shrink-0 border-r border-slate-100 cursor-pointer"
-                    onClick={() => setLocation(`/analysis/${product.id}`)}
-                  >
-                    <ProductImage
-                      hostedImageUrl={product.hostedImageUrl}
-                      imageUrl={product.imageUrl}
-                      alt={product.productName}
-                      className="w-full h-full bg-slate-100 flex items-center justify-center"
-                      size="lg"
-                    />
-                  </div>
-
-                  {/* Main content */}
-                  <div className="flex-1 px-5 py-4 min-w-0">
-                    <div className="flex items-start justify-between gap-4">
-                      <div className="min-w-0 flex-1">
-                        <div className="flex items-center gap-2 mb-1 flex-wrap">
-                          <button
-                            onClick={() => setLocation(`/analysis/${product.id}`)}
-                            className="font-bold text-slate-900 hover:text-primary transition-colors text-base leading-tight"
-                          >
-                            {product.productName}
-                          </button>
-                          <StatusBadge status={product.status} />
-                          {((product as any).supplierChangeCount ?? 0) > 0 && (
-                            <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-amber-100 text-amber-700 border border-amber-200">
-                              <RefreshCw size={9} />已换供应商（第{(product as any).supplierChangeCount}次）
-                            </span>
+                  return (
+                    <div
+                      key={product.id}
+                      className="bg-white rounded-2xl border border-slate-200 shadow-sm hover:shadow-md hover:border-slate-300 transition-all overflow-hidden"
+                    >
+                      <div className="flex items-stretch">
+                        {/* Thumbnail */}
+                        <div
+                          className="w-28 shrink-0 border-r border-slate-100 cursor-pointer relative"
+                          onClick={() => { markProductViewed(product.id); setLocation(`/analysis/${product.id}`); }}
+                        >
+                          {isProductUnread(product) && (
+                            <span className="absolute top-1 left-1 w-2.5 h-2.5 rounded-full bg-red-500 animate-pulse z-10" />
                           )}
+                          <ProductImage
+                            hostedImageUrl={product.hostedImageUrl}
+                            imageUrl={product.imageUrl}
+                            alt={product.productName}
+                            className="w-full h-full bg-slate-100 flex items-center justify-center"
+                            size="lg"
+                          />
                         </div>
-                        <div className="text-xs text-slate-400 mb-2.5 flex items-center gap-2 flex-wrap">
-                          <span>{product.supplierName}</span>
-                          <span>·</span>
-                          <span>{product.productSource}</span>
-                          <span>·</span>
-                          <span>提交：{product.submitterName}</span>
-                          {product.screeningSubmittedAt && (
-                            <>
-                              <span>·</span>
-                              <span>{format(new Date(product.screeningSubmittedAt), 'MM-dd HH:mm')}</span>
-                            </>
-                          )}
-                        </div>
-                        <div className="text-sm text-slate-600 bg-slate-50 border border-slate-100 rounded-lg px-3 py-1.5 inline-flex items-center gap-1.5 max-w-full">
-                          <TrendingUp size={12} className="text-slate-400 shrink-0" />
-                          <span className="truncate">{decision.sellingPoint}</span>
-                        </div>
-                      </div>
 
-                      <div className="flex items-center gap-4 shrink-0">
-                        {/* Key metrics */}
-                        <div className="hidden md:flex items-center gap-5 text-center">
-                          <div>
-                            <div className="text-xs text-slate-400 mb-0.5">采购价</div>
-                            <div className="font-bold text-slate-800 text-sm">¥{product.purchasePrice?.toFixed(0)}</div>
-                          </div>
-                          <div>
-                            <div className="text-xs text-slate-400 mb-0.5">毛利率</div>
-                            <div className={`font-bold text-sm ${margin > 30 ? 'text-emerald-600' : margin > 15 ? 'text-amber-600' : 'text-red-500'}`}>
-                              {margin > 0 ? `${margin.toFixed(1)}%` : '—'}
+                        {/* Main content */}
+                        <div className="flex-1 px-5 py-4 min-w-0">
+                          <div className="flex items-start justify-between gap-4">
+                            <div className="min-w-0 flex-1">
+                              <div className="flex items-center gap-2 mb-1 flex-wrap">
+                                <button
+                                  onClick={() => { markProductViewed(product.id); setLocation(`/analysis/${product.id}`); }}
+                                  className="font-bold text-slate-900 hover:text-primary transition-colors text-base leading-tight flex items-center gap-1.5"
+                                >
+                                  <span className="flex-1">{product.productName}</span>
+                                  {isProductUnread(product) && (
+                                    <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse shrink-0" title="有新更新" />
+                                  )}
+                                </button>
+                                <StatusBadge status={product.status} />
+                                {(product as any).resubmitted === true && (
+                                  <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold bg-red-100 text-red-700 border border-red-200">
+                                    曾拒绝
+                                  </span>
+                                )}
+                                {((product as any).supplierChangeCount ?? 0) > 0 && (
+                                  <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-amber-100 text-amber-700 border border-amber-200">
+                                    <RefreshCw size={9} />已换供应商（第{(product as any).supplierChangeCount}次）
+                                  </span>
+                                )}
+                              </div>
+                              <div className="text-xs text-slate-400 mb-2.5 flex items-center gap-2 flex-wrap">
+                                <span>{product.supplierName}</span>
+                                <span>·</span>
+                                <span>{product.productSource}</span>
+                                <span>·</span>
+                                <span>提交：{product.submitterName || '—'}</span>
+                              </div>
+
+                              {/* AI Summary row */}
+                              <div className="flex items-center gap-3 flex-wrap">
+                                <div className="flex items-center gap-1.5 text-xs text-slate-500">
+                                  <TrendingUp size={13} className="text-slate-400" />
+                                  <span>毛利率</span>
+                                  <span className={`font-semibold ${margin > 30 ? 'text-emerald-600' : margin > 15 ? 'text-amber-600' : 'text-red-500'}`}>
+                                    {margin > 0 ? `${margin.toFixed(1)}%` : '—'}
+                                  </span>
+                                </div>
+                                <div className="flex items-center gap-1.5 text-xs text-slate-500">
+                                  <span>建议价</span>
+                                  <span className="font-semibold text-slate-700">${product.suggestedPrice?.toFixed(0) || '—'}</span>
+                                </div>
+                                <div className="flex items-center gap-1.5 text-xs text-slate-500">
+                                  <span>拿货价</span>
+                                  <span className="font-semibold text-slate-700">¥{product.purchasePrice?.toFixed(0) || '—'}</span>
+                                </div>
+                              </div>
+                            </div>
+
+                            {/* Right side: metrics + verdict + actions */}
+                            <div className="flex items-center gap-4 shrink-0">
+                              {/* AI metrics */}
+                              <div className="flex flex-col gap-2 text-right">
+                                <div>
+                                  <div className="text-xs text-slate-400 mb-0.5">毛利率</div>
+                                  <div className={`font-bold text-sm ${margin > 30 ? 'text-emerald-600' : margin > 15 ? 'text-amber-600' : 'text-red-500'}`}>
+                                    {margin > 0 ? `${margin.toFixed(1)}%` : '—'}
+                                  </div>
+                                </div>
+                                <div>
+                                  <div className="text-xs text-slate-400 mb-0.5">拿货价</div>
+                                  <div className="font-bold text-slate-700 text-sm">¥{product.purchasePrice?.toFixed(0)}</div>
+                                </div>
+                                <div>
+                                  <div className="text-xs text-slate-400 mb-0.5">竞争力</div>
+                                  <div className="font-bold text-indigo-700 text-sm">
+                                    {score > 0 ? <>{score}<span className="text-indigo-300 font-normal">/10</span></> : '—'}
+                                  </div>
+                                </div>
+                                <div>
+                                  <div className="text-xs text-slate-400 mb-0.5">风险</div>
+                                  <div className={`font-bold text-sm ${
+                                    product.aiRiskLevel === '低' ? 'text-emerald-600' :
+                                    product.aiRiskLevel === '中' ? 'text-amber-600' : 'text-red-500'
+                                  }`}>
+                                    {product.aiRiskLevel ?? '—'}
+                                  </div>
+                                </div>
+                              </div>
+
+                              <div className="w-px h-10 bg-slate-100 hidden md:block" />
+
+                              {/* AI conclusion badge */}
+                              <div className={`rounded-lg px-3 py-2 border text-center min-w-[88px] ${vstyle.bg} border-${decision.verdict === 'recommend' ? 'emerald' : decision.verdict === 'caution' ? 'amber' : 'red'}-200`}>
+                                <div className="flex items-center justify-center gap-1 mb-0.5">
+                                  <span className={`w-1.5 h-1.5 rounded-full ${vstyle.dot}`} />
+                                  <span className="text-xs text-slate-400 font-medium">AI结论</span>
+                                </div>
+                                <div className={`text-xs font-bold leading-tight ${vstyle.text}`}>
+                                  {decision.conclusionLabel}
+                                </div>
+                              </div>
+
+                              <div className="w-px h-10 bg-slate-100" />
+
+                              {/* Action buttons */}
+                              <div className="flex flex-col gap-1.5 items-end">
+                                <div className="flex gap-1.5">
+                                  <button
+                                    onClick={() => { setSelectedProduct(product.id); setActionType('approve'); }}
+                                    className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-emerald-600 text-white text-xs font-semibold hover:bg-emerald-700 transition-colors shadow-sm"
+                                    title="通过初筛"
+                                  >
+                                    <CheckCircle2 size={13} /> 通过
+                                  </button>
+                                  <button
+                                    onClick={() => { setSelectedProduct(product.id); setActionType('return'); }}
+                                    className="p-1.5 text-slate-500 hover:bg-slate-50 rounded-lg transition-colors border border-slate-200"
+                                    title="退回"
+                                  >
+                                    <Undo2 size={15} />
+                                  </button>
+                                  <button
+                                    onClick={() => { setSelectedProduct(product.id); setActionType('reject'); }}
+                                    className="p-1.5 text-red-500 hover:bg-red-50 rounded-lg transition-colors border border-red-200"
+                                    title="拒绝"
+                                  >
+                                    <XCircle size={15} />
+                                  </button>
+                                </div>
+                                <button
+                                  onClick={() => setLocation(`/analysis/${product.id}`)}
+                                  className="flex items-center gap-1 text-xs text-slate-400 hover:text-primary transition-colors"
+                                >
+                                  查看详情 <ChevronRight size={12} />
+                                </button>
+                              </div>
                             </div>
                           </div>
-                          <div>
-                            <div className="text-xs text-slate-400 mb-0.5">竞争力</div>
-                            <div className="font-bold text-indigo-700 text-sm">
-                              {score > 0 ? <>{score}<span className="text-indigo-300 font-normal">/10</span></> : '—'}
-                            </div>
-                          </div>
-                          <div>
-                            <div className="text-xs text-slate-400 mb-0.5">风险</div>
-                            <div className={`font-bold text-sm ${
-                              product.aiRiskLevel === '低' ? 'text-emerald-600' :
-                              product.aiRiskLevel === '中' ? 'text-amber-600' : 'text-red-500'
-                            }`}>
-                              {product.aiRiskLevel ?? '—'}
-                            </div>
-                          </div>
-                        </div>
-
-                        <div className="w-px h-10 bg-slate-100 hidden md:block" />
-
-                        {/* AI conclusion badge */}
-                        <div className={`rounded-lg px-3 py-2 border text-center min-w-[88px] ${vstyle.bg} border-${decision.verdict === 'recommend' ? 'emerald' : decision.verdict === 'caution' ? 'amber' : 'red'}-200`}>
-                          <div className="flex items-center justify-center gap-1 mb-0.5">
-                            <span className={`w-1.5 h-1.5 rounded-full ${vstyle.dot}`} />
-                            <span className="text-xs text-slate-400 font-medium">AI结论</span>
-                          </div>
-                          <div className={`text-xs font-bold leading-tight ${vstyle.text}`}>
-                            {decision.conclusionLabel}
-                          </div>
-                        </div>
-
-                        <div className="w-px h-10 bg-slate-100" />
-
-                        {/* Action buttons */}
-                        <div className="flex flex-col gap-1.5 items-end">
-                          <div className="flex gap-1.5">
-                            <button
-                              onClick={() => { setSelectedProduct(product.id); setActionType('approve'); }}
-                              className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-emerald-600 text-white text-xs font-semibold hover:bg-emerald-700 transition-colors shadow-sm"
-                              title="通过初筛"
-                            >
-                              <CheckCircle2 size={13} /> 通过
-                            </button>
-                            <button
-                              onClick={() => { setSelectedProduct(product.id); setActionType('return'); }}
-                              className="p-1.5 text-slate-500 hover:bg-slate-50 rounded-lg transition-colors border border-slate-200"
-                              title="退回"
-                            >
-                              <Undo2 size={15} />
-                            </button>
-                            <button
-                              onClick={() => { setSelectedProduct(product.id); setActionType('reject'); }}
-                              className="p-1.5 text-red-500 hover:bg-red-50 rounded-lg transition-colors border border-red-200"
-                              title="拒绝"
-                            >
-                              <XCircle size={15} />
-                            </button>
-                          </div>
-                          <button
-                            onClick={() => setLocation(`/analysis/${product.id}`)}
-                            className="flex items-center gap-1 text-xs text-slate-400 hover:text-primary transition-colors"
-                          >
-                            查看详情 <ChevronRight size={12} />
-                          </button>
                         </div>
                       </div>
                     </div>
-                  </div>
-                </div>
+                  );
+                })}
               </div>
-            );
-          })}
-        </div>
+            </div>
+          ));
+        })()}
       </div>
 
       {/* ─── Section 2: Sample review decisions ─── */}
@@ -281,53 +367,72 @@ export default function ManagerPool() {
             待验样审批
             <span className="bg-violet-100 text-violet-700 text-xs font-bold px-2 py-0.5 rounded-full">{sampleProducts.length}</span>
           </h2>
-          <div className="space-y-3">
-            {sampleProducts.map(product => (
-              <div
-                key={product.id}
-                onClick={() => setLocation(`/sampling/${product.id}`)}
-                className="bg-white rounded-2xl border border-violet-200 shadow-sm hover:shadow-md hover:border-violet-400 transition-all cursor-pointer overflow-hidden"
-              >
-                <div className="flex items-center gap-4 px-5 py-4">
-                  <ProductImage
-                    hostedImageUrl={product.hostedImageUrl}
-                    imageUrl={product.imageUrl}
-                    size="lg"
-                    alt={product.productName}
-                  />
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 mb-1">
-                      <span className="font-bold text-slate-900 truncate">{product.productName}</span>
-                      <StatusBadge status={product.status} />
+          {(() => {
+            const grouped = groupProductsBySubmitter(sampleProducts);
+            return Array.from(grouped.entries()).map(([submitter, groupedProducts]) => (
+              <div key={submitter} className="mb-4">
+                <div className="flex items-center gap-2 mb-2 px-1">
+                  <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider">员工:</span>
+                  <span className="text-sm font-bold text-violet-600">{submitter}</span>
+                  <span className="bg-violet-100 text-violet-700 text-xs font-medium px-2 py-0.5 rounded-full">
+                    {groupedProducts.length}
+                  </span>
+                </div>
+                <div className="space-y-3">
+                  {groupedProducts.map(product => (
+                    <div
+                      key={product.id}
+                      onClick={() => setLocation(`/sampling/${product.id}`)}
+                      className="bg-white rounded-2xl border border-violet-200 shadow-sm hover:shadow-md hover:border-violet-400 transition-all cursor-pointer overflow-hidden"
+                    >
+                      <div className="flex items-center gap-4 px-5 py-4">
+                        <ProductImage
+                          hostedImageUrl={product.hostedImageUrl}
+                          imageUrl={product.imageUrl}
+                          size="lg"
+                          alt={product.productName}
+                        />
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2 mb-1">
+                            <span className="font-bold text-slate-900 truncate">{product.productName}</span>
+                            <StatusBadge status={product.status} />
+                            {(product as any).resubmitted === true && (
+                              <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold bg-red-100 text-red-700 border border-red-200">
+                                曾拒绝
+                              </span>
+                            )}
+                          </div>
+                          <div className="text-xs text-slate-400 flex gap-2 flex-wrap">
+                            <span>{product.supplierName}</span>
+                            <span>·</span>
+                            <span>验样人：{product.sampleReviewedBy || '—'}</span>
+                            {product.sampleReviewedAt && (
+                              <>
+                                <span>·</span>
+                                <span>{format(new Date(product.sampleReviewedAt), 'MM-dd HH:mm')}</span>
+                              </>
+                            )}
+                          </div>
+                          {product.sampleMaterialEval && (
+                            <p className="text-xs text-slate-500 mt-1 line-clamp-1">
+                              材质：{product.sampleMaterialEval}
+                              {(product as any).sampleWorkmanshipEval && `  做工：${(product as any).sampleWorkmanshipEval}`}
+                              {(product as any).sampleFunctionEval && `  功能：${(product as any).sampleFunctionEval}`}
+                            </p>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-2 shrink-0">
+                          <span className="text-xs text-violet-600 font-medium flex items-center gap-1">
+                            查看验样结果 <ChevronRight size={14} />
+                          </span>
+                        </div>
+                      </div>
                     </div>
-                    <div className="text-xs text-slate-400 flex gap-2 flex-wrap">
-                      <span>{product.supplierName}</span>
-                      <span>·</span>
-                      <span>验样人：{product.sampleReviewedBy || '—'}</span>
-                      {product.sampleReviewedAt && (
-                        <>
-                          <span>·</span>
-                          <span>{format(new Date(product.sampleReviewedAt), 'MM-dd HH:mm')}</span>
-                        </>
-                      )}
-                    </div>
-                    {product.sampleMaterialEval && (
-                      <p className="text-xs text-slate-500 mt-1 line-clamp-1">
-                        材质：{product.sampleMaterialEval}
-                        {(product as any).sampleWorkmanshipEval && `  做工：${(product as any).sampleWorkmanshipEval}`}
-                        {(product as any).sampleFunctionEval && `  功能：${(product as any).sampleFunctionEval}`}
-                      </p>
-                    )}
-                  </div>
-                  <div className="flex items-center gap-2 shrink-0">
-                    <span className="text-xs text-violet-600 font-medium flex items-center gap-1">
-                      查看验样结果 <ChevronRight size={14} />
-                    </span>
-                  </div>
+                  ))}
                 </div>
               </div>
-            ))}
-          </div>
+            ));
+          })()}
         </div>
       )}
 
@@ -341,37 +446,59 @@ export default function ManagerPool() {
               {purchaseTrackProducts.length}
             </span>
           </h2>
-          <div className="space-y-2">
-            {purchaseTrackProducts.map(product => (
-              <div
-                key={product.id}
-                onClick={() => setLocation(`/sampling/${product.id}`)}
-                className="bg-white rounded-xl border border-emerald-100 shadow-sm hover:shadow-md hover:border-emerald-300 transition-all cursor-pointer"
-              >
-                <div className="flex items-center gap-3 px-4 py-3">
-                  <ProductImage
-                    hostedImageUrl={product.hostedImageUrl}
-                    imageUrl={product.imageUrl}
-                    size="md"
-                    alt={product.productName}
-                  />
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 mb-0.5">
-                      <span className="font-semibold text-slate-800 text-sm truncate">{product.productName}</span>
-                      <StatusBadge status={product.status} />
-                    </div>
-                    <div className="text-xs text-slate-400 flex gap-2 flex-wrap">
-                      <span>{product.supplierName}</span>
-                      {(product as any).purchaseQuantity && (
-                        <span className="text-emerald-700 font-medium">· {(product as any).purchaseQuantity} 件</span>
+          {(() => {
+            const grouped = groupProductsBySubmitter(purchaseTrackProducts);
+            return Array.from(grouped.entries()).map(([submitter, groupedProducts]) => (
+              <div key={submitter} className="mb-4">
+                <div className="flex items-center gap-2 mb-2 px-1">
+                  <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider">员工:</span>
+                  <span className="text-sm font-bold text-emerald-600">{submitter}</span>
+                  <span className="bg-emerald-100 text-emerald-700 text-xs font-medium px-2 py-0.5 rounded-full">
+                    {groupedProducts.length}
+                  </span>
+                </div>
+                <div className="space-y-2">
+                  {groupedProducts.map(product => (
+                    <div
+                      key={product.id}
+                      onClick={() => { markProductViewed(product.id); setLocation(`/sampling/${product.id}`); }}
+                      className="bg-white rounded-xl border border-emerald-100 shadow-sm hover:shadow-md hover:border-emerald-300 transition-all cursor-pointer relative"
+                    >
+                      {isProductUnread(product) && (
+                        <span className="absolute top-2 right-2 w-2.5 h-2.5 rounded-full bg-red-500 animate-pulse z-10" />
                       )}
+                      <div className="flex items-center gap-3 px-4 py-3">
+                        <ProductImage
+                          hostedImageUrl={product.hostedImageUrl}
+                          imageUrl={product.imageUrl}
+                          size="md"
+                          alt={product.productName}
+                        />
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2 mb-0.5">
+                            <span className="font-semibold text-slate-800 text-sm truncate">{product.productName}</span>
+                            <StatusBadge status={product.status} />
+                            {(product as any).resubmitted === true && (
+                              <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold bg-red-100 text-red-700 border border-red-200">
+                                曾拒绝
+                              </span>
+                            )}
+                          </div>
+                          <div className="text-xs text-slate-400 flex gap-2 flex-wrap">
+                            <span>{product.supplierName}</span>
+                            {(product as any).purchaseQuantity && (
+                              <span className="text-emerald-700 font-medium">· {(product as any).purchaseQuantity} 件</span>
+                            )}
+                          </div>
+                        </div>
+                        <ChevronRight size={14} className="text-slate-400 flex-shrink-0" />
+                      </div>
                     </div>
-                  </div>
-                  <ChevronRight size={14} className="text-slate-400 flex-shrink-0" />
+                  ))}
                 </div>
               </div>
-            ))}
-          </div>
+            ));
+          })()}
         </div>
       )}
 
