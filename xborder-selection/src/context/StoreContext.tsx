@@ -1,7 +1,14 @@
-import React, { createContext, useContext, useState, useEffect, ReactNode, useCallback } from 'react';
+import React, { createContext, useContext, useState, useEffect, ReactNode, useCallback, useRef } from 'react';
 import { Product, PurchaseOrder } from '@workspace/api-client-react/src/generated/api.schemas';
 
 const API = '/api';
+
+export type ProductWithCodes = Product & {
+  spuCode?: string | null;
+  spuCodePeriod?: string | null;
+  spuCodeSequence?: number | null;
+  spuCodeAssignedAt?: string | null;
+};
 
 export type UserRole = 'product_specialist' | 'product_manager' | 'admin';
 
@@ -48,6 +55,9 @@ export interface SampleOption {
 export interface SampleSkuLine {
   id: string;
   sampleOptionId: string;
+  skuCode?: string | null;
+  skuCodeSuffix?: number | null;
+  skuCodeAssignedAt?: string | null;
   skuName?: string | null;
   attributes?: Record<string, string> | null;
   unitPrice?: number | null;
@@ -79,14 +89,61 @@ export interface SampleSkuLine {
   anomalyHandledAt?: string | null;
   anomalyResolvedAt?: string | null;
   anomalyImages?: string[] | null;
+  anomalyHistory?: SkuAnomalyHistoryEntry[] | null;
   // SKU级验样评价
   skuConsistentWithImage?: boolean | null;
   skuMaterialEval?: string | null;
   skuWorkmanshipEval?: string | null;
   skuFunctionEval?: string | null;
   skuRemarks?: string | null;
+  packingQuantity?: number | null;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface SkuAnomalyHistoryEntry {
+  id: string;
+  round: number;
+  status: 'reported' | 'handling' | 'processing' | 'resolved';
+  anomalyType?: string | null;
+  anomalyTypes?: string[] | null;
+  anomalyNote?: string | null;
+  reportedAt?: string | null;
+  reportedBy?: string | null;
+  handlingMethod?: string | null;
+  handlingNote?: string | null;
+  handledAt?: string | null;
+  handledBy?: string | null;
+  startedAt?: string | null;
+  startedBy?: string | null;
+  resolvedAt?: string | null;
+  resolvedBy?: string | null;
+}
+
+export interface ProcurementTask {
+  id: string;
+  title: string;
+  category?: string | null;
+  detail: string;
+  referenceImageUrl?: string | null;
+  referenceLink?: string | null;
+  assigneeMode: 'all' | 'specific';
+  status: 'published' | 'closed' | 'draft';
+  createdById?: string | null;
+  createdByName: string;
+  createdAt: string;
+  updatedAt: string;
+  publishedAt?: string | null;
+  closedAt?: string | null;
+  readAt?: string | null;
+  assignees?: Array<{
+    id: string;
+    taskId: string;
+    employeeId: string;
+    employeeName?: string | null;
+    assignedAt: string;
+    readAt?: string | null;
+  }>;
 }
 
 // 操作日志类型
@@ -102,14 +159,15 @@ export interface HistoryLogEntry {
 interface StoreState {
   role: UserRole;
   currentUser: { name: string; id: string; department: string };
-  products: Product[];
+  products: ProductWithCodes[];
   purchaseOrders: PurchaseOrder[];
   sampleOptions: SampleOption[];
   sampleSkuLines: SampleSkuLine[];
+  procurementTasks: ProcurementTask[];
   loading: boolean;
   logout: () => Promise<void>;
-  addProduct: (product: Partial<Product>, skus?: SkuInput[]) => Promise<Product>;
-  updateProduct: (id: string, updates: Partial<Product>, logAction?: string, note?: string) => Promise<void>;
+  addProduct: (product: Partial<ProductWithCodes>, skus?: SkuInput[]) => Promise<ProductWithCodes>;
+  updateProduct: (id: string, updates: Partial<ProductWithCodes>, logAction?: string, note?: string) => Promise<void>;
   sampleAction: (id: string, action: string, data?: Record<string, unknown>) => Promise<void>;
   // SKU级采购操作
   skuPurchaseAction: (productId: string, skuLineId: string, action: string, data?: Record<string, unknown>) => Promise<void>;
@@ -130,6 +188,7 @@ interface StoreState {
     skuWorkmanshipEval?: string;
     skuFunctionEval?: string;
     skuRemarks?: string;
+    packingQuantity?: number;
   }) => Promise<void>;
   managerDecision: (productId: string, payload: {
     action: 'approve' | 'reject';
@@ -141,6 +200,9 @@ interface StoreState {
   }) => Promise<void>;
   reportSamplingAnomaly: (skuLineId: string, data: { anomalyType: string; anomalyNote: string }) => Promise<void>;
   approveSamplingAnomaly: (skuLineId: string, data: { approved: boolean; note?: string }) => Promise<void>;
+  createProcurementTask: (task: Partial<ProcurementTask> & { assigneeEmployeeIds?: string[] }) => Promise<ProcurementTask>;
+  updateProcurementTask: (id: string, updates: Partial<ProcurementTask>) => Promise<ProcurementTask>;
+  markProcurementTaskRead: (id: string) => Promise<void>;
   refetch: () => Promise<void>;
 }
 
@@ -204,11 +266,13 @@ export function StoreProvider({
     department: '跨境选品部',
   };
 
-  const [products, setProducts] = useState<Product[]>([]);
+  const [products, setProducts] = useState<ProductWithCodes[]>([]);
   const [purchaseOrders, setPurchaseOrders] = useState<PurchaseOrder[]>([]);
   const [sampleOptions, setSampleOptions] = useState<SampleOption[]>([]);
   const [sampleSkuLines, setSampleSkuLines] = useState<SampleSkuLine[]>([]);
+  const [procurementTasks, setProcurementTasks] = useState<ProcurementTask[]>([]);
   const [loading, setLoading] = useState(true);
+  const pendingSkuActionsRef = useRef<Set<string>>(new Set());
 
   // 员工提交采样异常
   // 报告采样异常 - 优化：局部更新而非全量refetch
@@ -245,12 +309,23 @@ export function StoreProvider({
       console.error('refetch (products) failed:', err);
     }
     try {
+      const tasks = await apiFetch(API + '/tasks');
+      setProcurementTasks(tasks);
+    } catch (err) {
+      console.error('refetch (procurement tasks) failed:', err);
+    }
+    try {
       const [opts, skus] = await Promise.all([
         apiFetch(API + '/sample-options'),
         apiFetch(API + '/sample-sku-lines'),
       ]);
       setSampleOptions(opts);
-      setSampleSkuLines(skus);
+      setSampleSkuLines(prev => {
+        const pending = pendingSkuActionsRef.current;
+        if (pending.size === 0) return skus;
+        const previousById = new Map(prev.map(s => [s.id, s]));
+        return skus.map((sku: SampleSkuLine) => pending.has(sku.id) ? (previousById.get(sku.id) || sku) : sku);
+      });
     } catch (err) {
       console.error('refetch (sample data) failed:', err);
     }
@@ -281,7 +356,32 @@ export function StoreProvider({
     window.location.href = '/login';
   };
 
-  const addProduct = (product: Partial<Product>, skus?: SkuInput[]): Promise<Product> => {
+  const createProcurementTask = async (
+    task: Partial<ProcurementTask> & { assigneeEmployeeIds?: string[] }
+  ): Promise<ProcurementTask> => {
+    const created = await apiFetch(API + '/tasks', {
+      method: 'POST',
+      body: JSON.stringify(task),
+    });
+    setProcurementTasks(prev => [created, ...prev]);
+    return created;
+  };
+
+  const updateProcurementTask = async (id: string, updates: Partial<ProcurementTask>): Promise<ProcurementTask> => {
+    const updated = await apiFetch(API + '/tasks/' + id, {
+      method: 'PATCH',
+      body: JSON.stringify(updates),
+    });
+    setProcurementTasks(prev => prev.map(task => task.id === id ? updated : task));
+    return updated;
+  };
+
+  const markProcurementTaskRead = async (id: string): Promise<void> => {
+    const read = await apiFetch(API + '/tasks/' + id + '/read', { method: 'POST' });
+    setProcurementTasks(prev => prev.map(task => task.id === id ? { ...task, readAt: read.readAt || new Date().toISOString() } : task));
+  };
+
+  const addProduct = (product: Partial<ProductWithCodes>, skus?: SkuInput[]): Promise<ProductWithCodes> => {
     const action =
       product.status === 'pending_analysis' ? 'submit_analysis'
       : product.status === 'pending_info' ? 'pending_info'
@@ -307,7 +407,7 @@ export function StoreProvider({
 
   const updateProduct = (
     id: string,
-    updates: Partial<Product>,
+    updates: Partial<ProductWithCodes>,
     _logAction?: string,
     note?: string,
   ) => {
@@ -371,6 +471,11 @@ export function StoreProvider({
       url = API + '/products/' + id;
       method = 'PUT';
       body = { ...updates, submitterName: currentUser.name, action: 'pending_info' };
+    } else if (status === 'save_draft') {
+      url = API + '/products/' + id;
+      method = 'PUT';
+      const { status: _omit, ...rest } = updates;
+      body = { ...rest, submitterName: currentUser.name, action: 'save_draft' };
     } else {
       url = API + '/products/' + id;
       method = 'PUT';
@@ -415,15 +520,39 @@ export function StoreProvider({
     });
   };
 
-  // 完成入库（所有SKU验货通过后）- 优化：局部更新而非全量refetch
+  // Purchase state changes wait for the API result; pending rows are protected from stale polling overwrites.
+  const fastSkuPurchaseAction = async (productId: string, skuLineId: string, action: string, data?: Record<string, unknown>): Promise<void> => {
+    if (pendingSkuActionsRef.current.has(skuLineId)) return;
+    pendingSkuActionsRef.current.add(skuLineId);
+
+    try {
+      const response = await apiFetch(API + "/products/" + productId + "/sample-action", {
+        method: "POST",
+        body: JSON.stringify({ skuLineId, action, ...data }),
+      });
+      const { updatedSku, ...updatedProduct } = response;
+      const nextSku = updatedSku || await apiFetch(API + "/sample-sku-lines/" + skuLineId);
+
+      setProducts(prev => prev.map(p => p.id === productId ? updatedProduct : p));
+      setSampleSkuLines(prev => prev.map(s => s.id === skuLineId ? nextSku : s));
+    } finally {
+      pendingSkuActionsRef.current.delete(skuLineId);
+    }
+  };
+
   const completePurchase = async (productId: string): Promise<void> => {
-    await apiFetch(API + '/products/' + productId + '/complete-purchase', {
+    const updatedProduct = await apiFetch(API + '/products/' + productId + '/sample-action', {
       method: 'POST',
-      body: JSON.stringify({}),
+      body: JSON.stringify({ action: 'complete' }),
     });
-    // 局部更新：获取最新产品数据并更新状态
-    const updatedProduct = await apiFetch(API + '/products/' + productId);
     setProducts(prev => prev.map(p => p.id === productId ? { ...p, ...updatedProduct } : p));
+    Promise.all([
+      apiFetch(API + '/sample-sku-lines'),
+      apiFetch(API + '/sample-options'),
+    ]).then(([skus, opts]) => {
+      setSampleSkuLines(skus);
+      setSampleOptions(opts);
+    }).catch(err => console.error('completePurchase refetch failed:', err));
   };
 
   const addPurchaseOrder = (po: Partial<PurchaseOrder>) => {
@@ -559,6 +688,7 @@ export function StoreProvider({
     payload: {
       action: 'approve' | 'reject';
       selectedOptionId?: string;
+      selectedOptionIds?: string[];
       selectedSkuIds?: string[];
       skuQuantities?: Record<string, number>;
       comment?: string;
@@ -570,21 +700,32 @@ export function StoreProvider({
     });
     // 局部更新产品数据
     setProducts(prev => prev.map(p => p.id === productId ? { ...p, ...updated } : p));
+    // 批准采购会同步写入方案选择和 SKU 采购数量；后台刷新即可，不能让刷新失败误报为审批失败。
+    Promise.all([
+      apiFetch(API + '/sample-options'),
+      apiFetch(API + '/sample-sku-lines'),
+    ]).then(([opts, skus]) => {
+      setSampleOptions(opts);
+      setSampleSkuLines(skus);
+    }).catch(err => console.error('managerDecision sample refetch failed:', err));
   };
 
 
   return (
-    <StoreContext.Provider
+      <StoreContext.Provider
       value={{
-        role, currentUser, products, purchaseOrders, sampleOptions, sampleSkuLines, loading,
+        role, currentUser, products, purchaseOrders, sampleOptions, sampleSkuLines, procurementTasks, loading,
         logout, addProduct, updateProduct, sampleAction,
-        skuPurchaseAction, completePurchase,
+        skuPurchaseAction: fastSkuPurchaseAction, completePurchase,
         addPurchaseOrder, updatePurchaseOrderStatus, updatePurchaseOrder,
         addSampleOption, updateSampleOption, updateSampleOptionStatus, deleteSampleOption,
         addSampleSkuLine, updateSampleSkuLine, deleteSampleSkuLine, updateSkuEvaluation,
         managerDecision,
         reportSamplingAnomaly,
         approveSamplingAnomaly,
+        createProcurementTask,
+        updateProcurementTask,
+        markProcurementTaskRead,
         refetch,
       }}
     >

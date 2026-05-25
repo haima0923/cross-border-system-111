@@ -3,7 +3,6 @@ import { Link, useLocation } from 'wouter';
 import { useAppStore } from '@/context/StoreContext';
 import { 
   LayoutDashboard, 
-  PlusCircle, 
   Inbox, 
   ShoppingCart, 
   UserCircle,
@@ -11,38 +10,39 @@ import {
   Globe,
   Package,
   ClipboardCheck,
+  ClipboardList,
   BarChart2,
   Users,
 } from 'lucide-react';
 import { cn } from '@/components/shared/StatusBadge';
+import { countUnreadProducts, type UnreadScope } from '@/lib/unreadEvents';
 
 export function AppLayout({ children }: { children: React.ReactNode }) {
   const [location] = useLocation();
-  const { role, currentUser, logout, products } = useAppStore();
+  const { role, currentUser, logout, products, procurementTasks } = useAppStore();
+  const [unreadVersion, setUnreadVersion] = useState(0);
 
-  // ── 采购池未读提醒 ─────────────────────────────────────────────────────────
-  const purchaseStorageKey = `purchase_last_viewed_uid_${currentUser.id}`;
-  const [purchaseLastViewed, setPurchaseLastViewed] = useState<string | null>(
-    () => localStorage.getItem(purchaseStorageKey)
-  );
+  React.useEffect(() => {
+    const refreshUnread = () => setUnreadVersion(v => v + 1);
+    window.addEventListener('product-unread-change', refreshUnread);
+    return () => window.removeEventListener('product-unread-change', refreshUnread);
+  }, []);
 
-  const purchaseUnreadCount = useMemo(() => {
-    return products.filter(p => {
-      if (!p.enteredPurchaseAt) return false;
-      if (!purchaseLastViewed) return true;
-      return p.enteredPurchaseAt > purchaseLastViewed;
-    }).length;
-  }, [products, purchaseLastViewed]);
-
-  const handlePurchaseClick = () => {
-    const now = new Date().toISOString();
-    localStorage.setItem(purchaseStorageKey, now);
-    setPurchaseLastViewed(now);
-  };
+  const unreadRole = role === 'product_manager' || role === 'product_specialist' ? role : null;
+  const unreadCounts = useMemo(() => ({
+    workbench: unreadRole ? countUnreadProducts(products as any[], unreadRole, currentUser.id, ['workbench']) : 0,
+    'manager-pool': unreadRole ? countUnreadProducts(products as any[], unreadRole, currentUser.id, ['manager-pool']) : 0,
+    decisions: unreadRole ? countUnreadProducts(products as any[], unreadRole, currentUser.id, ['decisions']) : 0,
+    'purchase-pool': unreadRole ? countUnreadProducts(products as any[], unreadRole, currentUser.id, ['purchase-pool']) : 0,
+    tasks: role === 'product_specialist'
+      ? procurementTasks.filter(task => task.status === 'published' && !task.readAt).length
+      : 0,
+  }), [products, procurementTasks, unreadRole, role, currentUser.id, unreadVersion]);
+  const unreadCountFor = (scope: UnreadScope | 'tasks') => unreadCounts[scope];
 
   const navItems = [
     { name: '员工工作台', path: '/workbench', icon: LayoutDashboard, roles: ['product_specialist'] },
-    { name: '候选录入', path: '/entry', icon: PlusCircle, roles: ['product_specialist'] },
+    { name: '采购任务', path: '/tasks', icon: ClipboardList, roles: ['product_specialist', 'product_manager'] },
     { name: '样品管理', path: '/samples', icon: Package, roles: ['product_specialist'] },
     { name: '样品决策', path: '/decisions', icon: ClipboardCheck, roles: ['product_manager'] },
     { name: '管理层初筛池', path: '/manager-pool', icon: Inbox, roles: ['product_manager'] },
@@ -68,13 +68,18 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
           <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-4 px-2">主菜单</div>
           {visibleNav.map(item => {
             const isActive = location === item.path || (location.startsWith('/analysis') && item.path === '/workbench');
-            const isPurchasePool = item.path === '/purchase-pool';
-            const badge = isPurchasePool && purchaseUnreadCount > 0 ? purchaseUnreadCount : 0;
+            const scope =
+              item.path === '/workbench' ? 'workbench'
+              : item.path === '/manager-pool' ? 'manager-pool'
+              : item.path === '/decisions' ? 'decisions'
+              : item.path === '/purchase-pool' ? 'purchase-pool'
+              : item.path === '/tasks' ? 'tasks'
+              : null;
+            const badge = scope ? unreadCountFor(scope) : 0;
             return (
               <Link
                 key={item.path}
                 href={item.path}
-                onClick={isPurchasePool ? handlePurchaseClick : undefined}
                 className={cn(
                   "flex items-center gap-3 px-3 py-2.5 rounded-xl transition-all duration-200 text-sm font-medium",
                   isActive 

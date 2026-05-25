@@ -1,9 +1,31 @@
 import { pgTable, text, boolean, numeric, integer, timestamp, jsonb } from "drizzle-orm/pg-core";
 import { z } from "zod";
 
+export type SkuAnomalyHistoryEntry = {
+  id: string;
+  round: number;
+  status: "reported" | "handling" | "processing" | "resolved";
+  anomalyType?: string | null;
+  anomalyTypes?: string[] | null;
+  anomalyNote?: string | null;
+  reportedAt?: string | null;
+  reportedBy?: string | null;
+  handlingMethod?: string | null;
+  handlingNote?: string | null;
+  handledAt?: string | null;
+  handledBy?: string | null;
+  startedAt?: string | null;
+  startedBy?: string | null;
+  resolvedAt?: string | null;
+  resolvedBy?: string | null;
+};
+
 export const sampleSkuLinesTable = pgTable("sample_sku_lines", {
   id: text("id").primaryKey(),
   sampleOptionId: text("sample_option_id").notNull(),
+  skuCode: text("sku_code"),
+  skuCodeSuffix: integer("sku_code_suffix"),
+  skuCodeAssignedAt: timestamp("sku_code_assigned_at"),
   skuName: text("sku_name"),
   attributes: jsonb("attributes").$type<Record<string, string>>(),
   unitPrice: numeric("unit_price"),
@@ -36,6 +58,7 @@ export const sampleSkuLinesTable = pgTable("sample_sku_lines", {
   anomalyHandledAt: timestamp("anomaly_handled_at"),
   anomalyResolvedAt: timestamp("anomaly_resolved_at"),
   anomalyImages: jsonb("anomaly_images").$type<string[]>(),
+  anomalyHistory: jsonb("anomaly_history").$type<SkuAnomalyHistoryEntry[]>().default([]),
   // SKU级验样评价字段
   skuConsistentWithImage: boolean("sku_consistent_with_image"),
   skuMaterialEval: text("sku_material_eval"),

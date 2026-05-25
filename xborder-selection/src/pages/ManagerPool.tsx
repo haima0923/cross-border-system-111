@@ -10,6 +10,8 @@ import {
 import { ProductImage } from '@/components/shared/ProductImage';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog';
 import { getDecisionSummary, verdictStyles } from '@/lib/decisionUtils';
+import { isProductUnread as hasUnreadEvent, markProductUnreadRead, type UnreadScope } from '@/lib/unreadEvents';
+import { TaskContextPanel } from '@/components/shared/TaskContext';
 
 // 按员工分组的辅助函数
 function groupProductsBySubmitter<T extends { submitterName?: string | null }>(products: T[]): Map<string, T[]> {
@@ -22,6 +24,20 @@ function groupProductsBySubmitter<T extends { submitterName?: string | null }>(p
   return map;
 }
 
+function getLatestResubmitChanges(product: any) {
+  const log = Array.isArray(product.historyLog) ? product.historyLog : [];
+  const entry = [...log].reverse().find((item: any) =>
+    item?.action === '重新提交AI分析' ||
+    (typeof item?.note === 'string' && item.note.startsWith('【本次修改】'))
+  );
+  if (!entry?.note || typeof entry.note !== 'string') return [];
+  return entry.note
+    .split('\n')
+    .map((line: string) => line.trim())
+    .filter((line: string) => line.startsWith('- '))
+    .map((line: string) => line.slice(2));
+}
+
 export default function ManagerPool() {
   const { products, updateProduct, currentUser, role } = useAppStore();
   const [, setLocation] = useLocation();
@@ -30,22 +46,23 @@ export default function ManagerPool() {
   const [actionType, setActionType] = useState<'approve' | 'reject' | 'return' | null>(null);
   const [filterVerdict, setFilterVerdict] = useState<'all' | 'recommend' | 'caution' | 'reject'>('all');
 
-  // ── 未读提醒逻辑 ──
-  const productViewedKey = (productId: string) => 'mgr_pool_pv_' + currentUser.id + '_' + productId;
-  const [productLastViewed, setProductLastViewed] = useState<Record<string, string | null>>(() => {
-    const init: Record<string, string | null> = {};
-    products.forEach(p => { init[p.id] = localStorage.getItem(productViewedKey(p.id)); });
-    return init;
-  });
-  const markProductViewed = (productId: string) => {
-    const now = new Date().toISOString();
-    localStorage.setItem(productViewedKey(productId), now);
-    setProductLastViewed(prev => ({ ...prev, [productId]: now }));
+  const [unreadVersion, setUnreadVersion] = useState(0);
+  const markProductViewed = (product: any, scopes: UnreadScope[]) => {
+    markProductUnreadRead(product, 'product_manager', currentUser.id, scopes);
+    setUnreadVersion(v => v + 1);
   };
-  const isProductUnread = (product: { id: string; updatedAt: string }) => {
-    const viewed = productLastViewed[product.id];
-    if (!viewed) return true;
-    return product.updatedAt > viewed;
+  const isProductUnread = (product: any, scopes: UnreadScope[]) => {
+    unreadVersion;
+    return hasUnreadEvent(product, 'product_manager', currentUser.id, scopes);
+  };
+  const openInitialScreeningProduct = (product: any) => {
+    markProductViewed(product, ['manager-pool']);
+    setLocation(`/analysis/${product.id}`);
+  };
+  const startInitialScreeningAction = (product: any, action: 'approve' | 'reject' | 'return') => {
+    markProductViewed(product, ['manager-pool']);
+    setSelectedProduct(product.id);
+    setActionType(action);
   };
 
   useEffect(() => {
@@ -64,8 +81,9 @@ export default function ManagerPool() {
   ).sort(byUpdatedDesc);
 
   // Section 2: sample review decisions (already verified by employee) — sorted by updatedAt desc
-  const sampleProducts = products.filter(p => p.status === 'sample_reviewed')
-    .sort(byUpdatedDesc);
+  const sampleProducts = products.filter(p =>
+    p.status === 'sampling_review_submitted' || p.status === 'sample_reviewed'
+  ).sort(byUpdatedDesc);
 
   // Section 3: purchase execution tracking — sorted by updatedAt desc
   const purchaseTrackProducts = products.filter(p =>
@@ -82,6 +100,9 @@ export default function ManagerPool() {
 
   const handleAction = () => {
     if (!selectedProduct || !actionType) return;
+    if (actionType !== 'approve' && !managerComment.trim()) return;
+    const product = products.find(p => p.id === selectedProduct);
+    if (product) markProductViewed(product, ['manager-pool']);
 
     const statusMap = {
       approve: 'pending_sampling',
@@ -123,7 +144,7 @@ export default function ManagerPool() {
         {/* 未读提醒徽章 */}
         <div className="flex items-center gap-3">
           {(() => {
-            const poolUnreadCount = poolProducts.filter(isProductUnread).length;
+            const poolUnreadCount = poolProducts.filter(p => isProductUnread(p, ['manager-pool'])).length;
             return poolProducts.length > 0 && (
               <div className="flex items-center gap-1.5 bg-red-50 border border-red-200 rounded-full px-3 py-1.5">
                 <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse" />
@@ -132,7 +153,7 @@ export default function ManagerPool() {
             );
           })()}
           {(() => {
-            const sampleUnreadCount = sampleProducts.filter(isProductUnread).length;
+            const sampleUnreadCount = sampleProducts.filter(p => isProductUnread(p, ['decisions'])).length;
             return sampleProducts.length > 0 && (
               <div className="flex items-center gap-1.5 bg-violet-50 border border-violet-200 rounded-full px-3 py-1.5">
                 <span className="w-2 h-2 rounded-full bg-violet-500 animate-pulse" />
@@ -183,6 +204,12 @@ export default function ManagerPool() {
                 <span className="bg-primary/10 text-primary text-xs font-medium px-2 py-0.5 rounded-full">
                   {groupedProducts.length}
                 </span>
+                {groupedProducts.some(p => isProductUnread(p, ['manager-pool'])) && (
+                  <span className="inline-flex items-center gap-1 bg-red-50 text-red-700 border border-red-100 text-xs font-semibold px-2 py-0.5 rounded-full">
+                    <span className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse" />
+                    {groupedProducts.filter(p => isProductUnread(p, ['manager-pool'])).length} 条新
+                  </span>
+                )}
               </div>
               <div className="space-y-3">
                 {groupedProducts.map(product => {
@@ -190,21 +217,28 @@ export default function ManagerPool() {
                   const vstyle = verdictStyles[decision.verdict];
                   const margin = (product.grossMargin ?? 0) * 100;
                   const score = product.aiCompetitiveness ?? 0;
+                  const resubmitChanges = getLatestResubmitChanges(product);
 
                   return (
                     <div
                       key={product.id}
-                      className="bg-white rounded-2xl border border-slate-200 shadow-sm hover:shadow-md hover:border-slate-300 transition-all overflow-hidden"
+                      onClick={() => openInitialScreeningProduct(product)}
+                      className={`relative bg-white rounded-2xl border shadow-sm hover:shadow-md transition-all overflow-hidden cursor-pointer ${
+                        isProductUnread(product, ['manager-pool'])
+                          ? 'border-red-200 ring-1 ring-red-100'
+                          : 'border-slate-200 hover:border-slate-300'
+                      }`}
                     >
+                      {isProductUnread(product, ['manager-pool']) && (
+                        <span className="absolute top-3 right-3 inline-flex min-w-[18px] h-[18px] items-center justify-center rounded-full bg-red-500 px-1 text-[11px] font-bold leading-none text-white shadow-sm z-20">
+                          1
+                        </span>
+                      )}
                       <div className="flex items-stretch">
                         {/* Thumbnail */}
                         <div
-                          className="w-28 shrink-0 border-r border-slate-100 cursor-pointer relative"
-                          onClick={() => { markProductViewed(product.id); setLocation(`/analysis/${product.id}`); }}
+                          className="w-28 shrink-0 border-r border-slate-100 relative"
                         >
-                          {isProductUnread(product) && (
-                            <span className="absolute top-1 left-1 w-2.5 h-2.5 rounded-full bg-red-500 animate-pulse z-10" />
-                          )}
                           <ProductImage
                             hostedImageUrl={product.hostedImageUrl}
                             imageUrl={product.imageUrl}
@@ -220,18 +254,15 @@ export default function ManagerPool() {
                             <div className="min-w-0 flex-1">
                               <div className="flex items-center gap-2 mb-1 flex-wrap">
                                 <button
-                                  onClick={() => { markProductViewed(product.id); setLocation(`/analysis/${product.id}`); }}
+                                  onClick={e => { e.stopPropagation(); openInitialScreeningProduct(product); }}
                                   className="font-bold text-slate-900 hover:text-primary transition-colors text-base leading-tight flex items-center gap-1.5"
                                 >
                                   <span className="flex-1">{product.productName}</span>
-                                  {isProductUnread(product) && (
-                                    <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse shrink-0" title="有新更新" />
-                                  )}
                                 </button>
                                 <StatusBadge status={product.status} />
                                 {(product as any).resubmitted === true && (
                                   <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold bg-red-100 text-red-700 border border-red-200">
-                                    曾拒绝
+                                    重新提交
                                   </span>
                                 )}
                                 {((product as any).supplierChangeCount ?? 0) > 0 && (
@@ -246,6 +277,9 @@ export default function ManagerPool() {
                                 <span>{product.productSource}</span>
                                 <span>·</span>
                                 <span>提交：{product.submitterName || '—'}</span>
+                              </div>
+                              <div className="mb-3">
+                                <TaskContextPanel taskId={(product as any).taskId} compact />
                               </div>
 
                               {/* AI Summary row */}
@@ -266,6 +300,35 @@ export default function ManagerPool() {
                                   <span className="font-semibold text-slate-700">¥{product.purchasePrice?.toFixed(0) || '—'}</span>
                                 </div>
                               </div>
+                              {(product as any).resubmitted === true && (
+                                <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50/70 px-3 py-2">
+                                  <div className="flex items-center gap-2 text-xs font-semibold text-amber-800 mb-1">
+                                    <RefreshCw size={12} />
+                                    重新提交修改记录
+                                  </div>
+                                  {resubmitChanges.length > 0 ? (
+                                    <div className="flex flex-wrap gap-1.5">
+                                      {resubmitChanges.slice(0, 6).map((line: string, idx: number) => (
+                                        <span
+                                          key={idx}
+                                          className="rounded-full border border-amber-200 bg-white/70 px-2 py-0.5 text-[11px] font-medium text-amber-800"
+                                        >
+                                          {line}
+                                        </span>
+                                      ))}
+                                      {resubmitChanges.length > 6 && (
+                                        <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-semibold text-amber-700">
+                                          另有 {resubmitChanges.length - 6} 项
+                                        </span>
+                                      )}
+                                    </div>
+                                  ) : (
+                                    <div className="text-xs text-amber-700">
+                                      已重新提交，未检测到产品基础字段变化。
+                                    </div>
+                                  )}
+                                </div>
+                              )}
                             </div>
 
                             {/* Right side: metrics + verdict + actions */}
@@ -318,21 +381,21 @@ export default function ManagerPool() {
                               <div className="flex flex-col gap-1.5 items-end">
                                 <div className="flex gap-1.5">
                                   <button
-                                    onClick={() => { setSelectedProduct(product.id); setActionType('approve'); }}
+                                    onClick={e => { e.stopPropagation(); startInitialScreeningAction(product, 'approve'); }}
                                     className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-emerald-600 text-white text-xs font-semibold hover:bg-emerald-700 transition-colors shadow-sm"
                                     title="通过初筛"
                                   >
                                     <CheckCircle2 size={13} /> 通过
                                   </button>
                                   <button
-                                    onClick={() => { setSelectedProduct(product.id); setActionType('return'); }}
+                                    onClick={e => { e.stopPropagation(); startInitialScreeningAction(product, 'return'); }}
                                     className="p-1.5 text-slate-500 hover:bg-slate-50 rounded-lg transition-colors border border-slate-200"
                                     title="退回"
                                   >
                                     <Undo2 size={15} />
                                   </button>
                                   <button
-                                    onClick={() => { setSelectedProduct(product.id); setActionType('reject'); }}
+                                    onClick={e => { e.stopPropagation(); startInitialScreeningAction(product, 'reject'); }}
                                     className="p-1.5 text-red-500 hover:bg-red-50 rounded-lg transition-colors border border-red-200"
                                     title="拒绝"
                                   >
@@ -340,7 +403,7 @@ export default function ManagerPool() {
                                   </button>
                                 </div>
                                 <button
-                                  onClick={() => setLocation(`/analysis/${product.id}`)}
+                                  onClick={e => { e.stopPropagation(); openInitialScreeningProduct(product); }}
                                   className="flex items-center gap-1 text-xs text-slate-400 hover:text-primary transition-colors"
                                 >
                                   查看详情 <ChevronRight size={12} />
@@ -382,9 +445,14 @@ export default function ManagerPool() {
                   {groupedProducts.map(product => (
                     <div
                       key={product.id}
-                      onClick={() => setLocation(`/sampling/${product.id}`)}
-                      className="bg-white rounded-2xl border border-violet-200 shadow-sm hover:shadow-md hover:border-violet-400 transition-all cursor-pointer overflow-hidden"
+                      onClick={() => { markProductViewed(product, ['decisions']); setLocation(`/decisions?productId=${product.id}`); }}
+                      className="bg-white rounded-2xl border border-violet-200 shadow-sm hover:shadow-md hover:border-violet-400 transition-all cursor-pointer overflow-hidden relative"
                     >
+                      {isProductUnread(product, ['decisions']) && (
+                        <span className="absolute top-3 right-3 inline-flex min-w-[18px] h-[18px] items-center justify-center rounded-full bg-red-500 px-1 text-[11px] font-bold leading-none text-white shadow-sm z-10">
+                          1
+                        </span>
+                      )}
                       <div className="flex items-center gap-4 px-5 py-4">
                         <ProductImage
                           hostedImageUrl={product.hostedImageUrl}
@@ -398,7 +466,7 @@ export default function ManagerPool() {
                             <StatusBadge status={product.status} />
                             {(product as any).resubmitted === true && (
                               <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold bg-red-100 text-red-700 border border-red-200">
-                                曾拒绝
+                                重新提交
                               </span>
                             )}
                           </div>
@@ -461,11 +529,13 @@ export default function ManagerPool() {
                   {groupedProducts.map(product => (
                     <div
                       key={product.id}
-                      onClick={() => { markProductViewed(product.id); setLocation(`/sampling/${product.id}`); }}
+                      onClick={() => { markProductViewed(product, ['purchase-pool']); setLocation(`/sampling/${product.id}`); }}
                       className="bg-white rounded-xl border border-emerald-100 shadow-sm hover:shadow-md hover:border-emerald-300 transition-all cursor-pointer relative"
                     >
-                      {isProductUnread(product) && (
-                        <span className="absolute top-2 right-2 w-2.5 h-2.5 rounded-full bg-red-500 animate-pulse z-10" />
+                      {isProductUnread(product, ['purchase-pool']) && (
+                        <span className="absolute top-2 right-2 inline-flex min-w-[18px] h-[18px] items-center justify-center rounded-full bg-red-500 px-1 text-[11px] font-bold leading-none text-white shadow-sm z-10">
+                          1
+                        </span>
                       )}
                       <div className="flex items-center gap-3 px-4 py-3">
                         <ProductImage
@@ -480,7 +550,7 @@ export default function ManagerPool() {
                             <StatusBadge status={product.status} />
                             {(product as any).resubmitted === true && (
                               <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold bg-red-100 text-red-700 border border-red-200">
-                                曾拒绝
+                                重新提交
                               </span>
                             )}
                           </div>
@@ -522,7 +592,7 @@ export default function ManagerPool() {
               <label className="text-sm font-semibold text-slate-700">
                 审批意见
                 {actionType === 'approve' && <span className="text-slate-400 font-normal ml-1">（选填）</span>}
-                {actionType === 'reject' && <span className="text-red-500 ml-1">*</span>}
+                {actionType !== 'approve' && <span className="text-red-500 ml-1">*</span>}
               </label>
               <textarea
                 value={managerComment}
@@ -541,7 +611,7 @@ export default function ManagerPool() {
             </button>
             <button
               onClick={handleAction}
-              disabled={actionType === 'reject' && !managerComment.trim()}
+              disabled={actionType !== 'approve' && !managerComment.trim()}
               className={`px-6 py-2 rounded-xl text-white font-semibold shadow-sm transition-all disabled:opacity-50 ${
                 actionType === 'approve' ? 'bg-emerald-600 hover:bg-emerald-700 shadow-emerald-600/20' :
                 actionType === 'reject'  ? 'bg-red-600 hover:bg-red-700 shadow-red-600/20' :

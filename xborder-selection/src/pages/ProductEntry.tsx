@@ -43,6 +43,8 @@ import { useAppStore, SkuInput } from '@/context/StoreContext';
 import { useLocation, useSearch } from 'wouter';
 import { Product } from '@workspace/api-client-react/src/generated/api.schemas';
 import { Save, Send, AlertCircle, CheckCircle2, Plus, Trash2, ImageIcon, RefreshCw } from 'lucide-react';
+import { TaskContextPanel } from '@/components/shared/TaskContext';
+import { HoverZoomImage } from '@/components/shared/ProductImage';
 
 const NUMERIC_FIELDS = ['purchasePrice', 'suggestedPrice', 'weight', 'length', 'width', 'height', 'moq'];
 
@@ -101,13 +103,14 @@ const fieldLabels: Record<string, string> = {
 
 export default function ProductEntry() {
   const {
-    currentUser, addProduct, updateProduct, products, loading,
+    currentUser, addProduct, updateProduct, products, loading, procurementTasks,
     sampleAction, updateSampleSkuLine, addSampleSkuLine, deleteSampleSkuLine, sampleOptions, sampleSkuLines,
   } = useAppStore();
   const [, setLocation] = useLocation();
   const searchString = useSearch();
   const searchParams = new URLSearchParams(searchString);
   const editId = searchParams.get('id');
+  const routeTaskId = searchParams.get('taskId');
 
   const [form, setForm] = useState<ProductForm>(initialForm);
   const [numStr, setNumStr] = useState<Record<string, string>>({});
@@ -133,7 +136,7 @@ export default function ProductEntry() {
     setIsSubmitting(false);
     loadedForEditId.current = null; // allow Effect B to load the new editId
     isDirtyRef.current = false;     // user has not typed anything on this new route
-  }, [editId]);
+  }, [editId, routeTaskId]);
 
   // Effect B: Load existing product data in edit mode.
   // Guards (in order):
@@ -186,8 +189,12 @@ export default function ProductEntry() {
 
   // Detect if we're in supplier_changing mode (负向决策回流)
   const editProduct = editId ? products.find(p => p.id === editId) : null;
+  const routeTask = routeTaskId ? procurementTasks.find(task => task.id === routeTaskId) : null;
+  const associatedTaskId = (editProduct as any)?.taskId || routeTaskId;
+  const taskCreateBlocked = !editId && !!routeTaskId && (!routeTask || routeTask.status !== 'published');
   const isSupplierChangingMode = editProduct?.status === 'supplier_changing';
-  const isResubmitMode = editProduct?.status === 'completed' || editProduct?.status === 'rejected' || editProduct?.status === 'returned';
+  const isReturnedMode = editProduct?.status === 'returned';
+  const isResubmitMode = editProduct?.status === 'completed' || editProduct?.status === 'rejected' || isReturnedMode;
   // 草稿/待补充/重新提交状态下，SKU应完全可编辑（可添加/删除/修改）
   const isSkuEditable = !editId || isSupplierChangingMode || editProduct?.status === 'draft' || editProduct?.status === 'pending_info' || isResubmitMode;
 
@@ -300,8 +307,26 @@ export default function ProductEntry() {
   });
 
   const handleAction = async (action: 'draft' | 'pending_info' | 'analyze') => {
+    if (isSubmitting) return;
+
+    if (!editId && routeTaskId) {
+      const task = procurementTasks.find(item => item.id === routeTaskId);
+      if (!task) {
+        alert('采购任务不存在或未分配给当前账号，请返回采购任务页重新进入');
+        return;
+      }
+      if (task.status !== 'published') {
+        alert('该采购任务已关闭，不能再新建产品目录');
+        return;
+      }
+    }
+
     if (action === 'analyze' && progress < 100) {
       alert('请填写所有必填字段后再提交分析');
+      return;
+    }
+    if (action !== 'analyze' && !form.productName?.trim()) {
+      alert('请至少填写产品名称后再保存草稿');
       return;
     }
     if (action === 'analyze' && form.moq != null && !Number.isInteger(Number(form.moq))) {
@@ -316,6 +341,7 @@ export default function ProductEntry() {
       submitterName: currentUser.name,
       employeeId: currentUser.id,
       department: currentUser.department,
+      taskId: (editProduct as any)?.taskId || routeTaskId || undefined,
     };
 
     if (editId) {
@@ -362,27 +388,23 @@ export default function ProductEntry() {
             }
           }
         }
+        setLocation('/workbench');
       } catch (err) {
         console.error('编辑提交失败:', err);
+        alert('保存失败，请检查必填信息或网络状态后重试');
       } finally {
         setIsSubmitting(false);
       }
-      setLocation('/workbench');
     } else {
-      if (action === 'analyze') {
-        setIsSubmitting(true);
-        try {
-          await addProduct(payload, buildSkuInputs());
-          setIsSubmitting(false);
-          setLocation('/workbench');
-        } catch (err) {
-          console.error('提交失败:', err);
-          setIsSubmitting(false);
-          alert('提交失败，请重试');
-        }
-      } else {
-        addProduct(payload, buildSkuInputs()).catch(err => console.error('保存失败:', err));
+      setIsSubmitting(true);
+      try {
+        await addProduct(payload, buildSkuInputs());
         setLocation('/workbench');
+      } catch (err) {
+        console.error(action === 'analyze' ? '提交失败:' : '保存失败:', err);
+        alert(action === 'analyze' ? '提交失败，请重试' : '保存失败，请检查产品名称或网络状态后重试');
+      } finally {
+        setIsSubmitting(false);
       }
     }
   };
@@ -397,6 +419,7 @@ export default function ProductEntry() {
         status: 'screening_submitted' as any,
         submitterName: currentUser.name,
         employeeId: currentUser.id,
+        taskId: (editProduct as any)?.taskId || undefined,
         resubmitted: true,
       };
       await updateProduct(editId, payload, '重新提交初筛');
@@ -455,6 +478,7 @@ export default function ProductEntry() {
         status: 'save_draft' as any,
         submitterName: currentUser.name,
         employeeId: currentUser.id,
+        taskId: (editProduct as any)?.taskId || undefined,
       };
       await updateProduct(editId, payload, '保存草稿');
       // 同步SKU变更（完整：更新/新增/删除）
@@ -513,9 +537,26 @@ export default function ProductEntry() {
         <p className="text-slate-500 mt-1">
           {isSupplierChangingMode
             ? '请更新供应商信息（供应商名称、采购链接等），确认无误后点击"换供完成，提交采样"。'
+            : isReturnedMode
+              ? '请根据管理层退回原因修改产品信息，提交后系统会重新进行AI分析。'
             : '请填写产品基础信息，以供AI进行初步利润测算和可行性分析。'}
         </p>
       </div>
+
+      {isReturnedMode && editProduct?.managerComment && (
+        <div className="mb-4 bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 flex items-start gap-3">
+          <AlertCircle size={16} className="text-amber-600 mt-0.5 shrink-0" />
+          <div>
+            <div className="text-sm font-semibold text-amber-800 mb-0.5">管理层退回补充原因</div>
+            <div className="text-sm text-amber-700">{editProduct.managerComment}</div>
+            {editProduct.managerReviewedBy && (
+              <div className="text-xs text-amber-500 mt-1">
+                退回人：{editProduct.managerReviewedBy}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {isSupplierChangingMode && editProduct?.managerComment && (
         <div className="mb-4 bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 flex items-start gap-3">
@@ -584,6 +625,24 @@ export default function ProductEntry() {
           </div>
         );
       })()}
+
+      {associatedTaskId && (
+        <div className="mb-5">
+          <TaskContextPanel taskId={associatedTaskId} />
+        </div>
+      )}
+
+      {!editId && routeTaskId && !routeTask && !loading && (
+        <div className="mb-5 bg-red-50 border border-red-200 rounded-xl px-4 py-3 text-sm text-red-700">
+          采购任务不存在或未分配给当前账号，请返回采购任务页重新进入。
+        </div>
+      )}
+
+      {!editId && routeTask?.status === 'closed' && (
+        <div className="mb-5 bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm text-slate-600">
+          该采购任务已关闭，已有产品可继续流程，但不能再新建产品目录。
+        </div>
+      )}
 
       <div className="flex flex-col lg:flex-row gap-8">
         <div className="flex-1 space-y-6">
@@ -883,7 +942,12 @@ export default function ProductEntry() {
                 {skuRows.map((row, idx) => (
                   <div key={idx} className="flex items-center gap-2 text-slate-500 py-0.5">
                     {row.imageUrl && (
-                      <img src={row.imageUrl} alt="" className="w-6 h-6 rounded object-cover flex-shrink-0 border border-slate-200" onError={e => { (e.target as HTMLImageElement).style.display = 'none'; }} />
+                      <HoverZoomImage
+                        src={row.imageUrl}
+                        alt={row.skuName || `SKU ${idx + 1}`}
+                        className="w-6 h-6 rounded object-cover flex-shrink-0 border border-slate-200"
+                        onError={e => { (e.target as HTMLImageElement).style.display = 'none'; }}
+                      />
                     )}
                     <span className="truncate max-w-[110px]">{row.skuName || `SKU ${idx + 1}`}</span>
                     <span className="font-medium text-slate-700 ml-auto">
@@ -948,7 +1012,7 @@ export default function ProductEntry() {
                 /* Resubmit mode: save draft + resubmit to screening */
                 <>
                   <button
-                    onClick={handleResubmit}
+                    onClick={isReturnedMode ? () => handleAction('analyze') : handleResubmit}
                     disabled={isSubmitting}
                     className="w-full flex items-center justify-center gap-2 bg-gradient-to-r from-primary to-primary/90 text-white px-4 py-3 rounded-xl hover:shadow-lg hover:-translate-y-0.5 transition-all font-semibold disabled:opacity-50 disabled:cursor-not-allowed disabled:transform-none"
                   >
@@ -958,7 +1022,7 @@ export default function ProductEntry() {
                         提交中…
                       </>
                     ) : (
-                      <><Send size={18} /> 重新提交初筛</>
+                      <><Send size={18} /> {isReturnedMode ? '重新提交AI分析' : '重新提交初筛'}</>
                     )}
                   </button>
                   <button
@@ -974,7 +1038,7 @@ export default function ProductEntry() {
                 <>
                   <button
                     onClick={() => handleAction('analyze')}
-                    disabled={progress < 100 || isSubmitting}
+                    disabled={progress < 100 || isSubmitting || taskCreateBlocked}
                     className="w-full flex items-center justify-center gap-2 bg-gradient-to-r from-primary to-primary/90 text-white px-4 py-3 rounded-xl hover:shadow-lg hover:-translate-y-0.5 transition-all font-semibold disabled:opacity-50 disabled:cursor-not-allowed disabled:transform-none"
                   >
                     {isSubmitting ? (
@@ -990,13 +1054,15 @@ export default function ProductEntry() {
                   <div className="grid grid-cols-2 gap-3">
                     <button
                       onClick={() => handleAction('draft')}
-                      className="flex items-center justify-center gap-2 bg-white border border-slate-200 text-slate-700 px-4 py-2.5 rounded-xl hover:bg-slate-50 transition-colors text-sm font-medium"
+                      disabled={isSubmitting || taskCreateBlocked}
+                      className="flex items-center justify-center gap-2 bg-white border border-slate-200 text-slate-700 px-4 py-2.5 rounded-xl hover:bg-slate-50 transition-colors text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed"
                     >
                       <Save size={16} /> 存草稿
                     </button>
                     <button
                       onClick={() => handleAction('pending_info')}
-                      className="flex items-center justify-center gap-2 bg-orange-50 border border-orange-200 text-orange-700 px-4 py-2.5 rounded-xl hover:bg-orange-100 transition-colors text-sm font-medium"
+                      disabled={isSubmitting || taskCreateBlocked}
+                      className="flex items-center justify-center gap-2 bg-orange-50 border border-orange-200 text-orange-700 px-4 py-2.5 rounded-xl hover:bg-orange-100 transition-colors text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed"
                     >
                       标记待补充
                     </button>

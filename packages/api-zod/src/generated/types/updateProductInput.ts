@@ -11,6 +11,7 @@ export interface UpdateProductInput {
   submitterName?: string;
   employeeId?: string;
   department?: string;
+  taskId?: string;
   productName?: string;
   productSource?: string;
   link1688?: string;

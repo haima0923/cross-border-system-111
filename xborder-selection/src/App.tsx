@@ -13,6 +13,7 @@ import ManagerPool from "@/pages/ManagerPool";
 import PurchasePool from "@/pages/PurchasePool";
 import SamplingDetail from "@/pages/SamplingDetail";
 import SampleManagement from "@/pages/SampleManagement";
+import ProcurementTasks from "@/pages/ProcurementTasks";
 import ManagerDecision from "@/pages/ManagerDecision";
 import DataCenter from "@/pages/DataCenter";
 import AdminUsers from "@/pages/AdminUsers";
@@ -62,6 +63,7 @@ const WrappedProductEntry        = wrap(ProductEntry,           '新增录入');
 const WrappedAnalysisResult      = wrap(AnalysisResult,         '分析结果');
 const WrappedSamplingDetail      = wrap(SamplingDetail,         '样品详情');
 const WrappedSampleManagement    = wrap(SampleManagement,       '样品管理');
+const WrappedProcurementTasks    = wrap(ProcurementTasks,       '采购任务');
 const WrappedManagerDecisionGuard = wrap(ManagerDecisionGuard,  '经理决策');
 const WrappedManagerPool         = wrap(ManagerPool,            '经理初筛池');
 const WrappedPurchasePool        = wrap(PurchasePool,           '采购池');
@@ -83,6 +85,7 @@ function Router() {
         <Route path="/analysis/:id" component={WrappedAnalysisResult} />
         <Route path="/sampling/:id" component={WrappedSamplingDetail} />
         <Route path="/samples"      component={WrappedSampleManagement} />
+        <Route path="/tasks"        component={WrappedProcurementTasks} />
         <Route path="/decisions"    component={WrappedManagerDecisionGuard} />
         <Route path="/manager-pool" component={WrappedManagerPool} />
         <Route path="/purchase-pool" component={WrappedPurchasePool} />

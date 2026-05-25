@@ -10,6 +10,7 @@ import {
 } from 'lucide-react';
 import { ProductImage } from '@/components/shared/ProductImage';
 import { HistoryLog, type HistoryLogEntry } from '@/components/shared/HistoryLog';
+import { TaskContextPanel } from '@/components/shared/TaskContext';
 import { format } from 'date-fns';
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
@@ -314,11 +315,19 @@ export default function AnalysisResult() {
   };
 
   const handleManagerReturn = () => {
+    if (!managerComment.trim()) {
+      alert('请填写退回补充原因');
+      return;
+    }
     updateProduct(id, { status: 'returned', managerComment } as any, '管理层退回', managerComment);
     setLocation('/manager-pool');
   };
 
   const handleManagerReject = () => {
+    if (!managerComment.trim()) {
+      alert('请填写拒绝原因');
+      return;
+    }
     updateProduct(id, { status: 'rejected', managerComment } as any, '管理层拒绝', managerComment);
     setLocation('/manager-pool');
   };
@@ -367,7 +376,7 @@ export default function AnalysisResult() {
   const isEmployee = role === 'product_specialist';
   const isManager = role === 'product_manager';
   const needsEmployeeReview = product.status === 'analyzed_pending_review' || product.status === 'returned';
-  const analysisStatuses = ['analyzed_pending_review', 'screening_submitted', 'manager_reviewing', 'pending_purchase', 'purchased', 'rejected', 'returned'];
+  const analysisStatuses = ['analyzed_pending_review', 'screening_submitted', 'manager_reviewing', 'pending_purchase', 'purchased', 'rejected', 'rejected_unconfirmed', 'returned'];
   const hasAnalysis = analysisStatuses.includes(product.status) || !!(product.aiCompetitiveness || product.aiRiskLevel || product.aiReport);
 
   // ── AI-driven behavior state ───────────────────────────────────────────────
@@ -393,6 +402,30 @@ export default function AnalysisResult() {
         <ArrowLeft size={16} /> 返回列表
       </button>
 
+      {/* Rejection banner — shown before employee confirms the rejection */}
+      {isEmployee && product.status === 'rejected_unconfirmed' && (
+        <div className="mb-6 flex items-start gap-3 bg-red-50 border border-red-300 rounded-2xl px-5 py-4">
+          <XCircle size={20} className="text-red-500 shrink-0 mt-0.5" />
+          <div className="flex-1 min-w-0">
+            <p className="text-sm font-bold text-red-800">该产品已被管理层拒绝，请先查看提交信息和拒绝原因</p>
+            {product.managerComment && (
+              <p className="text-sm text-red-700 mt-1">
+                <span className="font-medium">拒绝原因：</span>{product.managerComment}
+              </p>
+            )}
+            {product.managerReviewedBy && (
+              <p className="text-xs text-red-500 mt-1">
+                审核人：{product.managerReviewedBy}
+                {product.managerReviewedAt && ` · ${format(new Date(product.managerReviewedAt), 'yyyy-MM-dd HH:mm')}`}
+              </p>
+            )}
+            <p className="text-xs text-red-500 mt-2">
+              看完本页的AI结论、员工推荐说明和管理层批注后，可返回工作台点击“确认知晓”归档。
+            </p>
+          </div>
+        </div>
+      )}
+
       {/* Return banner — shown to employee when product was returned by manager */}
       {isEmployee && product.status === 'returned' && (
         <div className="mb-6 flex items-start gap-3 bg-amber-50 border border-amber-300 rounded-2xl px-5 py-4">
@@ -413,6 +446,10 @@ export default function AnalysisResult() {
           </div>
         </div>
       )}
+
+      <div className="mb-6">
+        <TaskContextPanel taskId={(product as any).taskId} />
+      </div>
 
       {/* ── Decision Card (top, always shown when analysis exists) ── */}
       {hasAnalysis && <DecisionCard product={product} />}
@@ -900,7 +937,7 @@ export default function AnalysisResult() {
               <div className="p-6 space-y-4">
                 <div>
                   <label className="block text-sm font-semibold text-slate-700 mb-2">
-                    审批意见 <span className="text-slate-400 font-normal text-xs">（退回/拒绝时建议填写）</span>
+                    审批意见 <span className="text-slate-400 font-normal text-xs">（退回/拒绝时必填）</span>
                   </label>
                   <textarea
                     value={managerComment}

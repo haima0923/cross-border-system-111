@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useMemo } from 'react';
+import { Fragment, useState, useEffect, useRef, useMemo } from 'react';
 import { useParams, useLocation } from 'wouter';
 import {
   ArrowLeft, Plus, Trash2, Package, CheckCircle, Star,
@@ -7,7 +7,8 @@ import {
 } from 'lucide-react';
 import { useAppStore } from '../context/StoreContext';
 import { StatusBadge } from '../components/shared/StatusBadge';
-import { ProductImage } from '../components/shared/ProductImage';
+import { HoverZoomImage, ProductImage } from '../components/shared/ProductImage';
+import { TaskContextPanel } from '@/components/shared/TaskContext';
 import { HistoryLog, HistoryLogEntry } from '@/components/shared/HistoryLog';
 
 // ─── Color stripes for sample option cards ──────────────────────────────────
@@ -455,9 +456,7 @@ export default function SamplingDetail() {
 
   const isReadOnly = status === 'sampling_review_submitted' || status === 'pending_purchase';
   
-  const canAddOption = status === 'sampling_collection' && 
-    myOptions.every(o => !['evaluating', 'evaluated'].includes(o.sampleOrderStatus || '')) &&
-    !isReadOnly;
+  const canAddOption = status === 'sampling_collection' && myOptions.length < 3 && !isReadOnly;
   
   const canModifySku = (optionStatus: string | null | undefined) => {
     const os = optionStatus || 'pending';
@@ -487,6 +486,9 @@ export default function SamplingDetail() {
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2 mb-2">
               <StatusBadge status={status} />
+              <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${product.spuCode ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-500'}`}>
+                {product.spuCode ? `SPU ${product.spuCode}` : '货号待生成'}
+              </span>
             </div>
             <h1 className="text-xl font-bold text-slate-900">{product.productName}</h1>
             <div className="flex flex-wrap gap-4 mt-2 text-sm text-slate-500">
@@ -504,6 +506,9 @@ export default function SamplingDetail() {
                 打开采购链接
               </a>
             )}
+            <div className="mt-3">
+              <TaskContextPanel taskId={(product as any).taskId} compact />
+            </div>
           </div>
         </div>
 
@@ -719,8 +724,8 @@ export default function SamplingDetail() {
                           const isSkuReadOnly = isEvaluated || (orderStatus !== "evaluating") || isReadOnly;
                           const hasAnomaly = !!sku.anomalyType;
                           return (
-                            <>
-                              <tr key={sku.id} className={`border-t border-slate-100 ${hasAnomaly ? 'bg-orange-50/50' : ''}`}>
+                            <Fragment key={sku.id}>
+                              <tr className={`border-t border-slate-100 ${hasAnomaly ? 'bg-orange-50/50' : ''}`}>
                                 <td className="px-3 py-2">
                                   <ProductImage
                                     hostedImageUrl={sku.hostedImageUrl}
@@ -732,6 +737,9 @@ export default function SamplingDetail() {
                                 </td>
                                 <td className="px-3 py-2 font-medium text-slate-800">
                                   {sku.skuName || '—'}
+                                  <div className={`mt-1 text-[10px] font-medium ${sku.skuCode ? 'text-slate-700' : 'text-slate-400'}`}>
+                                    {sku.skuCode ? `SKU ${sku.skuCode}` : 'SKU货号待生成'}
+                                  </div>
                                   {sku.managerSelected && (
                                     <span className="ml-1.5 text-[10px] text-primary bg-primary/10 px-1.5 py-0.5 rounded-full">已选中</span>
                                   )}
@@ -813,7 +821,7 @@ export default function SamplingDetail() {
                                                     className="relative w-16 h-16 rounded-lg overflow-hidden border border-orange-200 cursor-pointer group"
                                                     onClick={() => setLightboxSrc(img)}
                                                   >
-                                                    <img src={img} alt={`异常截图${imgIdx+1}`} className="w-full h-full object-cover" />
+                                                    <HoverZoomImage src={img} alt={`异常截图${imgIdx+1}`} className="w-full h-full object-cover" />
                                                     <div className="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition-colors flex items-center justify-center">
                                                       <ZoomIn size={14} className="text-white opacity-0 group-hover:opacity-100 transition-opacity" />
                                                     </div>
@@ -885,17 +893,21 @@ export default function SamplingDetail() {
                                                   setLocalEdits(prev => ({ ...prev, [sku.id]: { ...prev[sku.id], packingQuantity: val } }));
                                                 }}
                                                 onBlur={e => {
-                                                  const val = e.target.value.trim();
-                                                  const num = val === '' ? undefined : (parseInt(val) || 0);
-                                                  updateSkuEvaluation(sku.id, { packingQuantity: num });
-                                                  setLocalEdits(prev => {
-                                                    const next = { ...prev };
-                                                    if (next[sku.id]) {
-                                                      delete next[sku.id].packingQuantity;
-                                                      if (Object.keys(next[sku.id]).length === 0) delete next[sku.id];
-                                                    }
-                                                    return next;
-                                                  });
+                                                  const raw = e.currentTarget.value;
+                                                  const val = raw.trim();
+                                                  const parsed = val === '' ? undefined : Number.parseInt(val, 10);
+                                                  const num = parsed != null && Number.isFinite(parsed) ? parsed : undefined;
+                                                  void updateSkuEvaluation(sku.id, { packingQuantity: num }).then(() => {
+                                                    setLocalEdits(prev => {
+                                                      if (prev[sku.id]?.packingQuantity !== raw) return prev;
+                                                      const next = { ...prev };
+                                                      if (next[sku.id]) {
+                                                        delete next[sku.id].packingQuantity;
+                                                        if (Object.keys(next[sku.id]).length === 0) delete next[sku.id];
+                                                      }
+                                                      return next;
+                                                    });
+                                                  }).catch(() => alert('保存装箱数失败，请重试'));
                                                 }}
                                                 disabled={isSkuReadOnly}
                                                 placeholder={isSkuReadOnly ? '' : '每箱数量'}
@@ -912,18 +924,20 @@ export default function SamplingDetail() {
                                                 const val = e.target.value;
                                                 setLocalEdits(prev => ({ ...prev, [sku.id]: { ...prev[sku.id], skuRemarks: val } }));
                                               }}
-                                              onBlur={e => {
-                                                const val = e.target.value;
-                                                updateSkuEvaluation(sku.id, { skuRemarks: val });
-                                                setLocalEdits(prev => {
-                                                  const next = { ...prev };
-                                                  if (next[sku.id]) {
-                                                    delete next[sku.id].skuRemarks;
-                                                    if (Object.keys(next[sku.id]).length === 0) delete next[sku.id];
-                                                  }
-                                                  return next;
-                                                });
-                                              }}
+                                                onBlur={e => {
+                                                  const val = e.currentTarget.value;
+                                                  void updateSkuEvaluation(sku.id, { skuRemarks: val }).then(() => {
+                                                    setLocalEdits(prev => {
+                                                      if (prev[sku.id]?.skuRemarks !== val) return prev;
+                                                      const next = { ...prev };
+                                                      if (next[sku.id]) {
+                                                        delete next[sku.id].skuRemarks;
+                                                        if (Object.keys(next[sku.id]).length === 0) delete next[sku.id];
+                                                      }
+                                                      return next;
+                                                    });
+                                                  }).catch(() => alert('保存备注失败，请重试'));
+                                                }}
                                               readOnly={isSkuReadOnly}
                                               rows={2}
                                               placeholder={isSkuReadOnly ? '' : '验样备注...'}
@@ -936,7 +950,7 @@ export default function SamplingDetail() {
                                   </td>
                                 </tr>
                               )}
-                            </>
+                            </Fragment>
                           );
                         })}
                       </tbody>
@@ -1214,7 +1228,7 @@ export default function SamplingDetail() {
                   <div className="flex gap-2 flex-wrap mb-2">
                     {samplingAnomaly.anomalyImages.map((img, idx) => (
                       <div key={idx} className="relative w-16 h-16 rounded-lg overflow-hidden border border-slate-200 group">
-                        <img src={img} alt={`截图${idx+1}`} className="w-full h-full object-cover" />
+                        <HoverZoomImage src={img} alt={`截图${idx+1}`} className="w-full h-full object-cover" />
                         <button
                           onClick={() => {
                             const newImgs = samplingAnomaly.anomalyImages.filter((_, i) => i !== idx);

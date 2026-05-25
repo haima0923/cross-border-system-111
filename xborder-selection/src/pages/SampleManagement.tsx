@@ -1,8 +1,10 @@
 import { useLocation } from 'wouter';
 import { useAppStore } from '@/context/StoreContext';
+import { useState } from 'react';
 import { format } from 'date-fns';
-import { Package, ArrowRight, Clock, FlaskConical, Layers, CheckCircle, Truck } from 'lucide-react';
+import { Package, ArrowRight, Clock, Layers } from 'lucide-react';
 import { ProductImage } from '@/components/shared/ProductImage';
+import { TaskContextPanel } from '@/components/shared/TaskContext';
 
 const SAMPLING_STATUSES = [
   'pending_sampling',
@@ -111,6 +113,11 @@ function ProductCard({
             <h3 className="text-sm font-semibold text-slate-800 truncate">
               {product.productName}
             </h3>
+            {product.spuCode && (
+              <span className="shrink-0 px-2 py-0.5 rounded-full bg-slate-100 text-slate-600 text-[10px] font-semibold">
+                SPU {product.spuCode}
+              </span>
+            )}
           </div>
 
           <div className="flex items-center gap-3 mb-3 flex-wrap">
@@ -140,6 +147,10 @@ function ProductCard({
             })}
           </div>
 
+          <div className="mb-2">
+            <TaskContextPanel taskId={(product as any).taskId} compact />
+          </div>
+
           <div className="flex items-center gap-1 text-xs text-slate-400">
             <Clock size={11} />
             {format(new Date(lastUpdated), 'MM-dd HH:mm')}
@@ -162,45 +173,25 @@ function ProductCard({
   );
 }
 
-function SectionBlock({
-  title,
-  subtitle,
-  children,
-}: {
-  title: string;
-  subtitle: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <div className="mb-8">
-      <div className="flex items-center gap-3 mb-4">
-        <h2 className="text-sm font-semibold text-slate-700">{title}</h2>
-        <span className="text-xs text-slate-400">{subtitle}</span>
-      </div>
-      <div className="space-y-3">
-        {children}
-      </div>
-    </div>
-  );
-}
-
 export default function SampleManagement() {
   const [, setLocation] = useLocation();
   const { products, sampleOptions, sampleSkuLines } = useAppStore();
+  const [activeStatus, setActiveStatus] = useState<SamplingStatus>('pending_sampling');
 
   const samplingProducts = products.filter(p =>
     (SAMPLING_STATUSES as readonly string[]).includes(p.status)
   );
 
   const navigate = (productId: string) => setLocation(`/sampling/${productId}`);
-
-  // Categorize: actionable vs waiting
-  const actionStatuses = new Set(['pending_sampling', 'sampling_collection']);
-  const actionProducts = samplingProducts.filter(p => actionStatuses.has(p.status));
-  const waitingProducts = samplingProducts.filter(p => !actionStatuses.has(p.status));
+  const productsForStatus = (status: SamplingStatus) =>
+    samplingProducts
+      .filter(p => p.status === status)
+      .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
+  const activeProducts = productsForStatus(activeStatus);
+  const activeConfig = STATUS_CONFIG[activeStatus];
 
   return (
-    <div className="max-w-4xl mx-auto">
+    <div className="max-w-5xl mx-auto">
       <div className="mb-8">
         <div className="flex items-center gap-3 mb-1">
           <div className="bg-primary/10 p-2.5 rounded-xl text-primary">
@@ -223,13 +214,54 @@ export default function SampleManagement() {
           <p className="text-slate-400 text-xs mt-1">产品进入采样流程后将在此处显示</p>
         </div>
       ) : (
-        <>
-          {actionProducts.length > 0 && (
-            <SectionBlock
-              title="待操作"
-              subtitle="需要你完成下一步动作"
-            >
-              {actionProducts.map(product => (
+        <div className="space-y-4">
+          <div className="flex flex-wrap gap-2 rounded-2xl border border-slate-200 bg-white p-2 shadow-sm">
+            {SAMPLING_STATUSES.map(status => {
+              const cfg = STATUS_CONFIG[status];
+              const count = productsForStatus(status).length;
+              const isActive = activeStatus === status;
+              return (
+                <button
+                  key={status}
+                  onClick={() => setActiveStatus(status)}
+                  className={`flex min-w-[9rem] flex-1 items-center justify-between gap-3 rounded-xl px-4 py-3 text-left transition-all ${
+                    isActive
+                      ? 'bg-slate-900 text-white shadow-sm'
+                      : 'bg-slate-50 text-slate-600 hover:bg-slate-100'
+                  }`}
+                >
+                  <span className="flex items-center gap-2">
+                    <span className={`w-2 h-2 rounded-full ${isActive ? 'bg-white' : cfg.dot}`} />
+                    <span className="text-sm font-semibold">{cfg.label}</span>
+                  </span>
+                  <span className={`rounded-full px-2.5 py-0.5 text-xs font-bold ${
+                    isActive ? 'bg-white/15 text-white' : 'bg-white text-slate-600 border border-slate-200'
+                  }`}>
+                    {count}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+
+          <div className="rounded-2xl border border-slate-200 bg-slate-50/60 p-4 min-h-[calc(100vh-17rem)]">
+            <div className="flex items-center justify-between mb-4 px-1">
+              <div className="flex items-center gap-2">
+                <span className={`w-2 h-2 rounded-full ${activeConfig.dot}`} />
+                <h2 className={`text-sm font-semibold ${activeConfig.text}`}>{activeConfig.label}</h2>
+              </div>
+              <span className="bg-white text-slate-600 px-2.5 py-0.5 rounded-full text-xs font-bold shadow-sm border border-slate-100">
+                {activeProducts.length}
+              </span>
+            </div>
+
+            {activeProducts.length === 0 ? (
+              <div className="h-48 flex items-center justify-center text-slate-400 text-sm border-2 border-dashed border-slate-200 rounded-xl bg-white/50">
+                当前状态暂无样品
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {activeProducts.map(product => (
                 <ProductCard
                   key={product.id}
                   product={product}
@@ -237,26 +269,11 @@ export default function SampleManagement() {
                   skuLines={sampleSkuLines}
                   onNavigate={navigate}
                 />
-              ))}
-            </SectionBlock>
-          )}
-          {waitingProducts.length > 0 && (
-            <SectionBlock
-              title="等待中"
-              subtitle="当前等待管理层决策"
-            >
-              {waitingProducts.map(product => (
-                <ProductCard
-                  key={product.id}
-                  product={product}
-                  options={sampleOptions.filter(o => o.productId === product.id)}
-                  skuLines={sampleSkuLines}
-                  onNavigate={navigate}
-                />
-              ))}
-            </SectionBlock>
-          )}
-        </>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
       )}
     </div>
   );

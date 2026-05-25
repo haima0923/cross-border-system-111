@@ -4,3 +4,6 @@ export * from "./sample_options";
 export * from "./sample_sku_lines";
 export * from "./purchase_order_lines";
 export * from "./users";
+export * from "./procurement_tasks";
+export * from "./procurement_task_assignees";
+export * from "./spu_code_counters";

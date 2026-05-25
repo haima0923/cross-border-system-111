@@ -9,6 +9,9 @@ const router: IRouter = Router();
 function serializeSkuLine(r: Record<string, unknown>) {
   return {
     ...r,
+    skuCode: r.skuCode ?? null,
+    skuCodeSuffix: r.skuCodeSuffix != null ? Number(r.skuCodeSuffix) : null,
+    skuCodeAssignedAt: r.skuCodeAssignedAt ? (r.skuCodeAssignedAt as Date).toISOString() : null,
     unitPrice: r.unitPrice != null ? Number(r.unitPrice) : null,
     moq: r.moq != null ? Number(r.moq) : null,
     weight: r.weight != null ? Number(r.weight) : null,
@@ -27,6 +30,7 @@ function serializeSkuLine(r: Record<string, unknown>) {
     anomalyHandledBy: r.anomalyHandledBy ?? null,
     anomalyHandledAt: r.anomalyHandledAt ? (r.anomalyHandledAt as Date).toISOString() : null,
     anomalyResolvedAt: r.anomalyResolvedAt ? (r.anomalyResolvedAt as Date).toISOString() : null,
+    anomalyHistory: Array.isArray(r.anomalyHistory) ? r.anomalyHistory : [],
     createdAt: r.createdAt ? (r.createdAt as Date).toISOString() : null,
     updatedAt: r.updatedAt ? (r.updatedAt as Date).toISOString() : null,
     skuConsistentWithImage: r.skuConsistentWithImage ?? null,
@@ -34,6 +38,7 @@ function serializeSkuLine(r: Record<string, unknown>) {
     skuWorkmanshipEval: r.skuWorkmanshipEval ?? null,
     skuFunctionEval: r.skuFunctionEval ?? null,
     skuRemarks: r.skuRemarks ?? null,
+    packingQuantity: r.packingQuantity != null ? Number(r.packingQuantity) : null,
     anomalyImages: r.anomalyImages ?? null,
   };
 }
@@ -91,7 +96,7 @@ router.put("/sample-sku-lines/:id", async (req, res) => {
     purchaseStatus, orderedAt, arrivedAt, inspectingStartedAt, passedAt, completedAt,
     anomalyType, anomalyNote, anomalyReportedAt, anomalyReportedBy,
     anomalyHandlingMethod, anomalyHandlingNote, anomalyHandledBy, anomalyHandledAt,
-    anomalyResolvedAt,
+    anomalyResolvedAt, anomalyHistory,
     skuConsistentWithImage, skuMaterialEval, skuWorkmanshipEval, skuFunctionEval, skuRemarks,
     anomalyImages,
   } = req.body;
@@ -123,6 +128,7 @@ router.put("/sample-sku-lines/:id", async (req, res) => {
   if (anomalyHandledBy !== undefined) updates.anomalyHandledBy = anomalyHandledBy;
   if (anomalyHandledAt !== undefined) updates.anomalyHandledAt = anomalyHandledAt ? new Date(anomalyHandledAt) : null;
   if (anomalyResolvedAt !== undefined) updates.anomalyResolvedAt = anomalyResolvedAt ? new Date(anomalyResolvedAt) : null;
+  if (anomalyHistory !== undefined) updates.anomalyHistory = Array.isArray(anomalyHistory) ? anomalyHistory : [];
   if (skuConsistentWithImage !== undefined) updates.skuConsistentWithImage = skuConsistentWithImage;
   if (skuMaterialEval !== undefined) updates.skuMaterialEval = skuMaterialEval;
   if (skuWorkmanshipEval !== undefined) updates.skuWorkmanshipEval = skuWorkmanshipEval;

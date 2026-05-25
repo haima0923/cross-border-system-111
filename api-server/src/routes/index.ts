@@ -5,6 +5,7 @@ import purchaseRouter from "./purchase";
 import sampleOptionsRouter from "./sample-options";
 import sampleSkuLinesRouter from "./sample-sku-lines";
 import statsRouter from "./stats";
+import tasksRouter from "./tasks";
 
 const router: IRouter = Router();
 
@@ -14,5 +15,6 @@ router.use(purchaseRouter);
 router.use(sampleOptionsRouter);
 router.use(sampleSkuLinesRouter);
 router.use(statsRouter);
+router.use(tasksRouter);
 
 export default router;

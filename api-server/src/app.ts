@@ -2,6 +2,7 @@ import express, { type Express } from "express";
 import cors from "cors";
 import cookieParser from "cookie-parser";
 import pinoHttp from "pino-http";
+import path from "path";
 import authRouter from "./routes/auth";
 import router from "./routes";
 import imageServingRouter from "./routes/imageServing";
@@ -41,6 +42,18 @@ app.use(
 app.use(cookieParser());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+
+const UPLOAD_ROOT = process.env.UPLOAD_ROOT || path.resolve(process.cwd(), "uploads");
+
+// Public local uploads. The frontend stores task/SKU/anomaly images as
+// /uploads/<type>/<file>, so the dev server proxies this path to the API.
+app.use(
+  "/uploads",
+  express.static(UPLOAD_ROOT, {
+    maxAge: "30d",
+    fallthrough: false,
+  }),
+);
 
 // Auth routes — no JWT required
 app.use("/api", authRouter);

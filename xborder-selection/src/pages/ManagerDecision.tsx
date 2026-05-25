@@ -1,13 +1,15 @@
-import { useState, useMemo } from 'react';
-import { useLocation } from 'wouter';
+import { Fragment, useState, useMemo, useEffect, useRef } from 'react';
+import { useLocation, useSearch } from 'wouter';
 import { useAppStore, type SampleOption, type SampleSkuLine } from '@/context/StoreContext';
 import {
   ClipboardCheck, ArrowLeft, CheckCircle2, XCircle, Star,
   Layers, AlertTriangle, Package, Eye, ThumbsUp, ThumbsDown,
   ZoomIn, X,
 } from 'lucide-react';
-import { ProductImage } from '@/components/shared/ProductImage';
+import { HoverZoomImage, ProductImage } from '@/components/shared/ProductImage';
 import { HistoryLog, type HistoryLogEntry } from '@/components/shared/HistoryLog';
+import { isProductUnread as hasUnreadEvent, markProductUnreadRead } from '@/lib/unreadEvents';
+import { TaskContextPanel } from '@/components/shared/TaskContext';
 
 const EVAL_MAP: Record<string, { text: string; color: string }> = {
   '1': { text: '差', color: 'text-red-600 bg-red-50' },
@@ -90,6 +92,8 @@ function SkuTable({
     return <p className="text-xs text-slate-400 italic mt-2">无 SKU 记录</p>;
   }
 
+  const detailColSpan = isSelectedOption ? 8 : 6;
+
   return (
     <div className="mt-3 overflow-x-auto rounded-xl border border-slate-200">
       <table className="w-full text-xs">
@@ -108,10 +112,17 @@ function SkuTable({
         <tbody>
           {skus.map((sku, idx) => {
             const checked = selectedSkuIds.has(sku.id);
+            const materialEval = evalLabel(sku.skuMaterialEval);
+            const workEval = evalLabel(sku.skuWorkmanshipEval);
+            const funcEval = evalLabel(sku.skuFunctionEval);
+            const consistency = sku.skuConsistentWithImage === true
+              ? { text: '与图片一致', color: 'text-green-700 bg-green-50' }
+              : sku.skuConsistentWithImage === false
+                ? { text: '与图片不符', color: 'text-red-700 bg-red-50' }
+                : { text: '未填写', color: 'text-slate-500 bg-slate-100' };
             return (
-              <>
+              <Fragment key={sku.id}>
               <tr
-                key={sku.id}
                 className={`border-t border-slate-100 ${isSelectedOption && checked ? 'bg-primary/5' : ''}`}
                 onClick={() => isSelectedOption && onToggleSku(sku.id)}
                 style={{ cursor: isSelectedOption ? 'pointer' : 'default' }}
@@ -132,6 +143,9 @@ function SkuTable({
                 </td>
                 <td className="px-3 py-2 font-medium text-slate-800">
                   {sku.skuName || `SKU ${idx + 1}`}
+                  <div className={`mt-1 text-[10px] font-medium ${sku.skuCode ? 'text-slate-700' : 'text-slate-400'}`}>
+                    {sku.skuCode ? `SKU ${sku.skuCode}` : 'SKU货号待生成'}
+                  </div>
                   {sku.recommended && (
                     <span className="ml-1.5 text-amber-500 text-[10px] font-medium bg-amber-50 px-1.5 py-0.5 rounded-full">
                       推荐
@@ -178,9 +192,51 @@ function SkuTable({
                   )}
                 </td>
               </tr>
+              <tr className="border-t border-slate-100 bg-slate-50/70">
+                <td colSpan={detailColSpan} className="px-3 py-3">
+                  <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-5">
+                    <div>
+                      <p className="text-[11px] text-slate-400 mb-1">图片一致性</p>
+                      <span className={`inline-flex px-2 py-0.5 rounded-full text-[11px] font-medium ${consistency.color}`}>
+                        {consistency.text}
+                      </span>
+                    </div>
+                    <div>
+                      <p className="text-[11px] text-slate-400 mb-1">材质</p>
+                      <span className={`inline-flex px-2 py-0.5 rounded-full text-[11px] font-medium ${materialEval?.color || 'text-slate-500 bg-slate-100'}`}>
+                        {materialEval?.text || '未填写'}
+                      </span>
+                    </div>
+                    <div>
+                      <p className="text-[11px] text-slate-400 mb-1">做工</p>
+                      <span className={`inline-flex px-2 py-0.5 rounded-full text-[11px] font-medium ${workEval?.color || 'text-slate-500 bg-slate-100'}`}>
+                        {workEval?.text || '未填写'}
+                      </span>
+                    </div>
+                    <div>
+                      <p className="text-[11px] text-slate-400 mb-1">功能</p>
+                      <span className={`inline-flex px-2 py-0.5 rounded-full text-[11px] font-medium ${funcEval?.color || 'text-slate-500 bg-slate-100'}`}>
+                        {funcEval?.text || '未填写'}
+                      </span>
+                    </div>
+                    <div>
+                      <p className="text-[11px] text-slate-400 mb-1">装箱数</p>
+                      <span className="text-xs font-semibold text-slate-700">
+                        {sku.packingQuantity != null ? sku.packingQuantity : '未填写'}
+                      </span>
+                    </div>
+                  </div>
+                  <div className="mt-2">
+                    <p className="text-[11px] text-slate-400 mb-1">验样备注</p>
+                    <p className="text-xs text-slate-600 whitespace-pre-wrap">
+                      {sku.skuRemarks?.trim() || '无'}
+                    </p>
+                  </div>
+                </td>
+              </tr>
               {sku.anomalyType && (
                 <tr className="border-t border-orange-100 bg-orange-50/50">
-                  <td colSpan={isSelectedOption ? 8 : 6} className="px-3 py-2">
+                  <td colSpan={detailColSpan} className="px-3 py-2">
                     <div className="flex items-start gap-3">
                       <AlertTriangle size={14} className="text-orange-500 mt-0.5 flex-shrink-0" />
                       <div className="flex-1 min-w-0">
@@ -190,7 +246,7 @@ function SkuTable({
                           <div className="mt-2 flex gap-2 flex-wrap">
                             {(sku.anomalyImages as string[]).map((img: string, imgIdx: number) => (
                               <div key={imgIdx} className="w-14 h-14 rounded-lg overflow-hidden border border-orange-200 cursor-pointer group relative" onClick={() => onImageClick?.(img)}>
-                                <img src={img} alt="" className="w-full h-full object-cover" />
+                                <HoverZoomImage src={img} alt="异常截图" className="w-full h-full object-cover" />
                                 <div className="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition-colors flex items-center justify-center">
                                   <ZoomIn size={12} className="text-white opacity-0 group-hover:opacity-100 transition-opacity" />
                                 </div>
@@ -203,7 +259,7 @@ function SkuTable({
                   </td>
                 </tr>
               )}
-              </>
+              </Fragment>
             );
           })}
         </tbody>
@@ -237,12 +293,19 @@ function OptionComparisonCard({
   onImageClick?: (src: string) => void;
 }) {
   const color = CARD_COLORS[colorIndex % CARD_COLORS.length];
-  const materialEval = evalLabel(option.sampleMaterialEval);
-  const workEval = evalLabel(option.sampleWorkmanshipEval);
-  const funcEval = evalLabel(option.sampleFunctionEval);
 
-  // Compute average score
-  const scores = [option.sampleMaterialEval, option.sampleWorkmanshipEval, option.sampleFunctionEval]
+  const evaluatedSkuCount = skus.filter(s =>
+    s.anomalyType ||
+    (
+      s.skuConsistentWithImage != null &&
+      !!s.skuMaterialEval &&
+      !!s.skuWorkmanshipEval &&
+      !!s.skuFunctionEval
+    )
+  ).length;
+  const packingCount = skus.filter(s => s.packingQuantity != null).length;
+  const remarkCount = skus.filter(s => !!s.skuRemarks?.trim()).length;
+  const scores = skus.flatMap(s => [s.skuMaterialEval, s.skuWorkmanshipEval, s.skuFunctionEval])
     .filter(v => v)
     .map(v => Number(v));
   const avgScore = scores.length > 0 ? scores.reduce((a, b) => a + b, 0) / scores.length : 0;
@@ -301,32 +364,17 @@ function OptionComparisonCard({
 
         {/* Evaluation summary */}
         <div className="flex flex-wrap gap-2 mb-3">
-          <span className={`text-[11px] px-2 py-0.5 rounded-full font-medium ${
-            option.sampleConsistentWithImage
-              ? 'bg-green-50 text-green-700'
-              : option.sampleConsistentWithImage === false
-                ? 'bg-red-50 text-red-700'
-                : 'bg-slate-100 text-slate-500'
-          }`}>
-            {option.sampleConsistentWithImage === true
-              ? '✓ 与图片一致'
-              : option.sampleConsistentWithImage === false
-                ? '✗ 与图片不符'
-                : '一致性未评'}
+          <span className="text-[11px] px-2 py-0.5 rounded-full font-medium bg-teal-50 text-teal-700">
+            已评价 SKU：{evaluatedSkuCount}/{skus.length}
           </span>
-          {materialEval && (
-            <span className={`text-[11px] px-2 py-0.5 rounded-full font-medium ${materialEval.color}`}>
-              材质：{materialEval.text}
-            </span>
-          )}
-          {workEval && (
-            <span className={`text-[11px] px-2 py-0.5 rounded-full font-medium ${workEval.color}`}>
-              工艺：{workEval.text}
-            </span>
-          )}
-          {funcEval && (
-            <span className={`text-[11px] px-2 py-0.5 rounded-full font-medium ${funcEval.color}`}>
-              功能：{funcEval.text}
+          <span className={`text-[11px] px-2 py-0.5 rounded-full font-medium ${
+            packingCount === skus.length && skus.length > 0 ? 'bg-blue-50 text-blue-700' : 'bg-amber-50 text-amber-700'
+          }`}>
+            装箱数：{packingCount}/{skus.length}
+          </span>
+          {remarkCount > 0 && (
+            <span className="text-[11px] px-2 py-0.5 rounded-full font-medium bg-slate-100 text-slate-600">
+              备注：{remarkCount} 条
             </span>
           )}
         </div>
@@ -342,9 +390,9 @@ function OptionComparisonCard({
           </div>
         )}
 
-        {option.sampleRemarks && (
+        {(option.sampleRemarks || option.remarks) && (
           <p className="text-xs text-slate-500 italic border-t border-slate-100 pt-2 mb-3">
-            备注：{option.sampleRemarks}
+            方案备注：{option.sampleRemarks || option.remarks}
           </p>
         )}
 
@@ -392,6 +440,13 @@ function DecisionDetail({
   const [rejectComment, setRejectComment] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [lightboxSrc, setLightboxSrc] = useState<string | null>(null);
+  const submittingRef = useRef(false);
+
+  useEffect(() => {
+    if (product && !['sampling_review_submitted', 'sample_reviewed'].includes(product.status)) {
+      onBack();
+    }
+  }, [product?.status]);
 
   if (!product) {
     return (
@@ -464,12 +519,14 @@ function DecisionDetail({
   }
 
   async function handleApprove() {
+    if (submittingRef.current) return;
     if (selectedOptionIds.size === 0 || selectedSkuIds.size === 0) return;
     const allHaveQty = Array.from(selectedSkuIds).every(id => (skuQuantities[id] ?? 0) > 0);
     if (!allHaveQty) {
       alert('请为每款已选 SKU 填写采购数量（必须大于 0）');
       return;
     }
+    submittingRef.current = true;
     setSubmitting(true);
     try {
       await managerDecision(product!.id, {
@@ -480,14 +537,17 @@ function DecisionDetail({
         comment: comment.trim() || undefined,
       });
       onBack();
-    } catch {
-      alert('提交失败，请重试');
+    } catch (err: any) {
+      alert(err?.message || '提交失败，请重试');
     } finally {
+      submittingRef.current = false;
       setSubmitting(false);
     }
   }
 
   async function handleReject() {
+    if (submittingRef.current) return;
+    submittingRef.current = true;
     setSubmitting(true);
     try {
       await managerDecision(product!.id, {
@@ -495,9 +555,10 @@ function DecisionDetail({
         comment: rejectComment.trim() || undefined,
       });
       onBack();
-    } catch {
-      alert('提交失败，请重试');
+    } catch (err: any) {
+      alert(err?.message || '提交失败，请重试');
     } finally {
+      submittingRef.current = false;
       setSubmitting(false);
     }
   }
@@ -535,6 +596,9 @@ function DecisionDetail({
           <div className="flex flex-wrap gap-4 text-sm text-slate-500">
             <span>供应商：{product.supplierName || '—'}</span>
             <span>采购价：¥{product.purchasePrice?.toFixed(2) ?? '—'}</span>
+            <span className={product.spuCode ? 'text-slate-700 font-medium' : 'text-slate-400'}>
+              {product.spuCode ? `SPU货号：${product.spuCode}` : '批准后自动生成货号'}
+            </span>
           </div>
           {product.link1688 && (
             <a
@@ -546,10 +610,13 @@ function DecisionDetail({
               采购链接
             </a>
           )}
+          <div className="mt-3">
+            <TaskContextPanel taskId={(product as any).taskId} compact />
+          </div>
         </div>
       </div>
 
-      {/* Comparison view - side by side cards */}
+      {/* Comparison view */}
       <div className="mb-6">
         <h3 className="text-sm font-semibold text-slate-700 mb-4 flex items-center gap-2">
           <Eye size={16} className="text-primary" />
@@ -557,11 +624,7 @@ function DecisionDetail({
           <span className="text-xs text-slate-400 font-normal ml-2">勾选要通过的方案（可多选）</span>
         </h3>
 
-        <div className="grid gap-4" style={{
-          gridTemplateColumns: options.length <= 3
-            ? `repeat(${options.length}, 1fr)`
-            : 'repeat(3, 1fr)',
-        }}>
+        <div className="space-y-4">
           {options.map((opt, idx) => {
             const optSkus = sampleSkuLines.filter(s => s.sampleOptionId === opt.id);
             return (
@@ -668,44 +731,48 @@ function DecisionDetail({
 // ─── Main page: list of pending decisions ─────────────────────────────────────
 export default function ManagerDecision() {
   const [, setLocation] = useLocation();
+  const searchString = useSearch();
+  const productIdFromQuery = useMemo(() => new URLSearchParams(searchString).get('productId'), [searchString]);
   const { products, sampleOptions, sampleSkuLines, currentUser } = useAppStore();
   const [selectedProductId, setSelectedProductId] = useState<string | null>(null);
 
-  // ── 未读提醒逻辑 ─────────────────────────────────────────────────────────
-  const productViewedKey = (productId: string) => 'mgr_decision_pv_' + currentUser.id + '_' + productId;
-  const [productLastViewed, setProductLastViewed] = useState<Record<string, string | null>>(() => {
-    const init: Record<string, string | null> = {};
-    products.forEach(p => { init[p.id] = localStorage.getItem(productViewedKey(p.id)); });
-    return init;
-  });
-
-  const markProductViewed = (productId: string) => {
-    const now = new Date().toISOString();
-    localStorage.setItem(productViewedKey(productId), now);
-    setProductLastViewed(prev => ({ ...prev, [productId]: now }));
+  const [unreadVersion, setUnreadVersion] = useState(0);
+  const markProductViewed = (product: any) => {
+    markProductUnreadRead(product, 'product_manager', currentUser.id, ['decisions']);
+    setUnreadVersion(v => v + 1);
   };
-
   const isProductUnread = (product: any) => {
-    const viewed = productLastViewed[product.id];
-    if (!viewed) return true;
-    return product.updatedAt > viewed;
+    unreadVersion;
+    return hasUnreadEvent(product, 'product_manager', currentUser.id, ['decisions']);
   };
 
   // Products awaiting manager decision
   const decisionProducts = products.filter(p =>
-    p.status === 'sampling_review_submitted'
+    p.status === 'sampling_review_submitted' || p.status === 'sample_reviewed'
   );
+
+  useEffect(() => {
+    if (!productIdFromQuery) return;
+    const match = decisionProducts.find(p => p.id === productIdFromQuery);
+    if (match) {
+      setSelectedProductId(productIdFromQuery);
+      markProductViewed(match);
+    }
+  }, [productIdFromQuery, decisionProducts]);
 
   // ── 统计未读数量（显示在页面标题）───────────────────────────────────────
   const unreadCount = useMemo(() => {
     return decisionProducts.filter(p => isProductUnread(p)).length;
-  }, [decisionProducts, productLastViewed]);
+  }, [decisionProducts, unreadVersion]);
 
   if (selectedProductId) {
     return (
       <DecisionDetail
         productId={selectedProductId}
-        onBack={() => setSelectedProductId(null)}
+        onBack={() => {
+          setSelectedProductId(null);
+          setLocation('/decisions');
+        }}
       />
     );
   }
@@ -749,9 +816,14 @@ export default function ManagerDecision() {
             return (
               <div
                 key={product.id}
-                onClick={() => { markProductViewed(product.id); setSelectedProductId(product.id); }}
-                className="bg-white rounded-2xl border border-slate-200 shadow-sm px-6 py-5 hover:border-primary/30 hover:shadow-md transition-all duration-200 cursor-pointer"
+                onClick={() => { markProductViewed(product); setSelectedProductId(product.id); }}
+                className="relative bg-white rounded-2xl border border-slate-200 shadow-sm px-6 py-5 hover:border-primary/30 hover:shadow-md transition-all duration-200 cursor-pointer"
               >
+                {isProductUnread(product) && (
+                  <span className="absolute top-3 right-3 inline-flex min-w-[18px] h-[18px] items-center justify-center rounded-full bg-red-500 px-1 text-[11px] font-bold leading-none text-white shadow-sm z-10">
+                    1
+                  </span>
+                )}
                 <div className="flex items-start gap-4">
                   <ProductImage
                     hostedImageUrl={product.hostedImageUrl}
@@ -761,10 +833,7 @@ export default function ManagerDecision() {
                   />
                   <div className="flex-1 min-w-0">
                     <h3 className="text-sm font-semibold text-slate-800 truncate mb-1 flex items-center gap-2">
-                      <span className="flex-1">{product.productName}</span>
-                      {isProductUnread(product) && (
-                        <span className="w-2.5 h-2.5 rounded-full bg-red-500 shrink-0 animate-pulse" title="新提交" />
-                      )}
+                      <span className="flex-1 pr-5">{product.productName}</span>
                     </h3>
                     <div className="flex items-center gap-3 flex-wrap">
                       <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium bg-indigo-100 text-indigo-700">

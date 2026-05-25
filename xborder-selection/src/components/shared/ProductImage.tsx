@@ -1,11 +1,12 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
+import type { SyntheticEvent } from 'react';
 import { Package } from 'lucide-react';
 
 const SIZE_MAP = {
-  sm: { outer: 'w-8 h-8',   rounded: 'rounded',    icon: 12, popSize: 200 },
-  md: { outer: 'w-10 h-10', rounded: 'rounded-lg',  icon: 16, popSize: 220 },
-  lg: { outer: 'w-14 h-14', rounded: 'rounded-xl',  icon: 22, popSize: 240 },
-  xl: { outer: 'w-20 h-20', rounded: 'rounded-xl',  icon: 28, popSize: 240 },
+  sm: { outer: 'w-8 h-8',   rounded: 'rounded',    icon: 12 },
+  md: { outer: 'w-10 h-10', rounded: 'rounded-lg',  icon: 16 },
+  lg: { outer: 'w-14 h-14', rounded: 'rounded-xl',  icon: 22 },
+  xl: { outer: 'w-20 h-20', rounded: 'rounded-xl',  icon: 28 },
 } as const;
 
 interface ProductImageProps {
@@ -15,6 +16,57 @@ interface ProductImageProps {
   className?: string;
   alt?: string;
   withHover?: boolean;
+}
+
+export function HoverZoomImage({
+  src,
+  alt = '',
+  className,
+  zoomClassName = 'max-h-[72vh] max-w-[72vw] rounded-xl object-contain',
+  onError,
+}: {
+  src: string;
+  alt?: string;
+  className: string;
+  zoomClassName?: string;
+  onError?: (event: SyntheticEvent<HTMLImageElement>) => void;
+}) {
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [visible, setVisible] = useState(false);
+
+  useEffect(() => {
+    return () => {
+      if (timerRef.current) clearTimeout(timerRef.current);
+    };
+  }, []);
+
+  const handleEnter = () => {
+    if (timerRef.current) clearTimeout(timerRef.current);
+    timerRef.current = setTimeout(() => setVisible(true), 120);
+  };
+
+  const handleLeave = () => {
+    if (timerRef.current) clearTimeout(timerRef.current);
+    setVisible(false);
+  };
+
+  return (
+    <>
+      <img
+        src={src}
+        alt={alt}
+        className={`${className} cursor-zoom-in transition-transform duration-150 hover:scale-105`}
+        onMouseEnter={handleEnter}
+        onMouseLeave={handleLeave}
+        onError={onError}
+      />
+      {visible && (
+        <div className="fixed left-1/2 top-1/2 z-[9999] -translate-x-1/2 -translate-y-1/2 pointer-events-none rounded-2xl border border-slate-200 bg-white p-2 shadow-2xl">
+          <img src={src} alt={alt} className={zoomClassName} />
+        </div>
+      )}
+    </>
+  );
 }
 
 export function ProductImage({
@@ -34,9 +86,8 @@ export function ProductImage({
   const [triedPrimary, setTriedPrimary] = useState(false);
   const [failed, setFailed]       = useState(false);
 
-  const containerRef = useRef<HTMLDivElement>(null);
-  const timerRef     = useRef<ReturnType<typeof setTimeout>>();
-  const [popover, setPopover]     = useState<{ x: number; y: number } | null>(null);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [showPreview, setShowPreview] = useState(false);
 
   useEffect(() => {
     const pUrl = imageUrl ? `/api/image-proxy?url=${encodeURIComponent(imageUrl)}` : null;
@@ -44,7 +95,14 @@ export function ProductImage({
     setSrc(next);
     setTriedPrimary(false);
     setFailed(false);
+    setShowPreview(false);
   }, [hostedImageUrl, imageUrl]);
+
+  useEffect(() => {
+    return () => {
+      if (timerRef.current) clearTimeout(timerRef.current);
+    };
+  }, []);
 
   const handleError = useCallback(() => {
     if (!triedPrimary && fallbackSrc && fallbackSrc !== src) {
@@ -58,36 +116,13 @@ export function ProductImage({
 
   const handleMouseEnter = useCallback(() => {
     if (!withHover || !src || failed) return;
-    clearTimeout(timerRef.current);
-    timerRef.current = setTimeout(() => {
-      const el = containerRef.current;
-      if (!el) return;
-      const rect    = el.getBoundingClientRect();
-      const cfg     = SIZE_MAP[size];
-      const popSize = cfg.popSize;
-      const gap     = 10;
-
-      let x = rect.right + gap;
-      if (x + popSize > window.innerWidth - 8) {
-        x = rect.left - popSize - gap;
-      }
-      if (x < 8) {
-        x = Math.max(8, rect.left + rect.width / 2 - popSize / 2);
-      }
-
-      let y = rect.top;
-      if (y + popSize > window.innerHeight - 8) {
-        y = window.innerHeight - popSize - 8;
-      }
-      if (y < 8) y = 8;
-
-      setPopover({ x, y });
-    }, 180);
-  }, [withHover, src, failed, size]);
+    if (timerRef.current) clearTimeout(timerRef.current);
+    timerRef.current = setTimeout(() => setShowPreview(true), 120);
+  }, [withHover, src, failed]);
 
   const handleMouseLeave = useCallback(() => {
-    clearTimeout(timerRef.current);
-    setPopover(null);
+    if (timerRef.current) clearTimeout(timerRef.current);
+    setShowPreview(false);
   }, []);
 
   const cfg        = SIZE_MAP[size];
@@ -98,8 +133,7 @@ export function ProductImage({
   return (
     <>
       <div
-        ref={containerRef}
-        className={`relative overflow-hidden bg-slate-100 flex items-center justify-center ${outerClass}`}
+        className={`relative overflow-hidden bg-slate-100 flex items-center justify-center ${hasImage && withHover ? 'cursor-zoom-in' : ''} ${outerClass}`}
         onMouseEnter={handleMouseEnter}
         onMouseLeave={handleMouseLeave}
       >
@@ -115,21 +149,13 @@ export function ProductImage({
         )}
       </div>
 
-      {popover && hasImage && (
-        <div
-          className="fixed z-[9999] pointer-events-none"
-          style={{ left: popover.x, top: popover.y }}
-        >
-          <div
-            className="bg-white rounded-xl shadow-2xl border border-slate-200 overflow-hidden"
-            style={{ width: cfg.popSize, height: cfg.popSize }}
-          >
-            <img
-              src={src!}
-              alt={alt}
-              className="w-full h-full object-contain"
-            />
-          </div>
+      {showPreview && hasImage && withHover && (
+        <div className="fixed left-1/2 top-1/2 z-[9999] -translate-x-1/2 -translate-y-1/2 pointer-events-none rounded-2xl border border-slate-200 bg-white p-2 shadow-2xl">
+          <img
+            src={src!}
+            alt={alt}
+            className="max-h-[72vh] max-w-[72vw] rounded-xl object-contain"
+          />
         </div>
       )}
     </>

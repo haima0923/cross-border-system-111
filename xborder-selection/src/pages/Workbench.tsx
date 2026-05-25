@@ -2,9 +2,11 @@ import React, { useState, useMemo } from 'react';
 import { useAppStore } from '@/context/StoreContext';
 import { StatusBadge } from '@/components/shared/StatusBadge';
 import { useLocation } from 'wouter';
-import { Search, Plus, ArrowRight, X, ChevronDown, ChevronRight, AlertTriangle, CheckCircle2, RefreshCw } from 'lucide-react';
+import { Search, Plus, ArrowRight, X, ChevronDown, ChevronRight, AlertTriangle, CheckCircle2, RefreshCw, ExternalLink } from 'lucide-react';
 import { format } from 'date-fns';
 import { ProductImage } from '@/components/shared/ProductImage';
+import { isProductUnread as hasUnreadEvent, markProductUnreadRead } from '@/lib/unreadEvents';
+import { TaskContextPanel } from '@/components/shared/TaskContext';
 
 // ── Routing constants (determines which detail page a card links to) ──────────
 const ENTRY_STATUSES = ['draft', 'pending_info', 'returned', 'supplier_changing'];
@@ -62,6 +64,36 @@ const MAIN_GROUPS = [
 ];
 
 const ENDED_STATUSES = ['rejected', 'completed'];
+const ENTRY_REQUIRED_FIELDS = [
+  'productName', 'productSource', 'link1688', 'supplierName',
+  'purchasePrice', 'weight', 'length', 'width', 'height', 'material', 'usage',
+];
+const ENTRY_FIELD_LABELS: Record<string, string> = {
+  productName: '产品名称',
+  productSource: '产品来源',
+  link1688: '采购链接',
+  supplierName: '供应商名称',
+  purchasePrice: '采购价',
+  weight: '重量',
+  length: '长',
+  width: '宽',
+  height: '高',
+  material: '材质',
+  usage: '用途',
+};
+
+function getMissingEntryFields(product: any) {
+  return ENTRY_REQUIRED_FIELDS.filter(field => {
+    const value = product[field];
+    return value === null || value === undefined || value === '';
+  }).map(field => ENTRY_FIELD_LABELS[field]);
+}
+
+function normalizeLink(url?: string | null) {
+  const value = url?.trim();
+  if (!value) return null;
+  return /^https?:\/\//i.test(value) ? value : `https://${value}`;
+}
 
 // Sub-labels shown on cards inside the "审核状态" column
 function getReviewSubLabel(status: string, supplierChangeCount?: number): { label: string; className: string } | null {
@@ -94,43 +126,17 @@ export default function Workbench() {
   const [inputValue, setInputValue] = useState('');
   const [showEnded, setShowEnded] = useState(false);
   const [pendingAction, setPendingAction] = useState<string | null>(null);
+  const [activeGroupId, setActiveGroupId] = useState<string>('pending');
 
-  // ── 分组未读提醒 ──
-  const groupViewedKey = (groupId: string) => `wb_gv_` + currentUser.id + `_` + groupId;
-  const [groupLastViewed, setGroupLastViewed] = useState<Record<string, string | null>>(() => {
-    const init: Record<string, string | null> = {};
-    MAIN_GROUPS.forEach(g => { init[g.id] = localStorage.getItem(groupViewedKey(g.id)); });
-    return init;
-  });
-  
-// 产品级未读标识
-  const productViewedKey = (productId: string) => 'wb_pv_' + currentUser.id + '_' + productId;
-  const [productLastViewed, setProductLastViewed] = useState<Record<string, string | null>>(() => {
-    const init: Record<string, string | null> = {};
-    products.forEach(p => { init[p.id] = localStorage.getItem(productViewedKey(p.id)); });
-    return init;
-  });
-  const markProductViewed = (productId: string) => {
-    const now = new Date().toISOString();
-    localStorage.setItem(productViewedKey(productId), now);
-    setProductLastViewed(prev => ({ ...prev, [productId]: now }));
+  const [unreadVersion, setUnreadVersion] = useState(0);
+  const markProductViewed = (product: any) => {
+    markProductUnreadRead(product, 'product_specialist', currentUser.id, ['workbench']);
+    setUnreadVersion(v => v + 1);
   };
   const isProductUnread = (product: any) => {
-    const viewed = productLastViewed[product.id];
-    if (!viewed) return true;
-    return product.updatedAt > viewed;
+    unreadVersion;
+    return hasUnreadEvent(product, 'product_specialist', currentUser.id, ['workbench']);
   };
-const markGroupViewed = (groupId: string) => {
-    const now = new Date().toISOString();
-    localStorage.setItem(groupViewedKey(groupId), now);
-    setGroupLastViewed(prev => ({ ...prev, [groupId]: now }));
-  };
-
-  // ── 已结束未读提醒 ─────────────────────────────────────────────────────────
-  const endedStorageKey = `ended_last_viewed_uid_${currentUser.id}`;
-  const [endedLastViewed, setEndedLastViewed] = useState<string | null>(
-    () => localStorage.getItem(endedStorageKey)
-  );
 
   React.useEffect(() => {
     if (role === 'product_manager') setLocation('/manager-pool');
@@ -163,26 +169,17 @@ const markGroupViewed = (groupId: string) => {
     .filter(p => ENDED_STATUSES.includes(p.status))
     .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
 
-  // 已结束未读数：从当前用户的全部产品计算（不受搜索过滤影响）
-  const endedUnreadCount = useMemo(() => {
-    return myProducts.filter(p => {
-      if (!p.enteredEndedAt) return false;
-      if (!endedLastViewed) return true;
-      return p.enteredEndedAt > endedLastViewed;
-    }).length;
-  }, [myProducts, endedLastViewed]);
-
   const handleToggleEnded = () => {
-    if (!showEnded) {
-      // 展开时清零：记录当前时间为最后查看时间
-      const now = new Date().toISOString();
-      localStorage.setItem(endedStorageKey, now);
-      setEndedLastViewed(now);
-    }
     setShowEnded(prev => !prev);
   };
 
   const isFiltering = searchQuery.trim() !== '';
+  const productsForGroup = (group: (typeof MAIN_GROUPS)[number]) =>
+    filteredProducts
+      .filter(p => group.statuses.includes(p.status))
+      .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
+  const activeGroup = MAIN_GROUPS.find(group => group.id === activeGroupId) || MAIN_GROUPS[0];
+  const activeGroupProducts = productsForGroup(activeGroup);
 
   return (
     <div className="space-y-6">
@@ -267,7 +264,13 @@ const markGroupViewed = (groupId: string) => {
                     <SupplierChangeBadge count={product.supplierChangeCount ?? 0} />
                   </div>
                   <p className="font-semibold text-slate-800 text-sm mb-1 line-clamp-1">{product.productName}</p>
+                  {product.spuCode && (
+                    <p className="text-[10px] font-semibold text-slate-500 mb-1">SPU {product.spuCode}</p>
+                  )}
                   <p className="text-xs text-slate-500 mb-1">{product.supplierName}</p>
+                  <div className="mb-2">
+                    <TaskContextPanel taskId={(product as any).taskId} compact />
+                  </div>
                   {product.managerComment && (
                     <p className={`text-xs rounded px-2 py-1 mb-3 border ${
                       isRejection
@@ -279,22 +282,35 @@ const markGroupViewed = (groupId: string) => {
                   )}
                   <div className="flex gap-2">
                     {isRejection && (
-                      <button
-                        disabled={isLoading}
-                        onClick={async e => {
-                          e.stopPropagation();
-                          setPendingAction(actionKey);
-                          try {
-                            await sampleAction(product.id, 'acknowledge_rejection');
-                          } finally {
-                            setPendingAction(null);
-                          }
-                        }}
-                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-red-100 text-red-700 hover:bg-red-200 transition-colors disabled:opacity-50"
-                      >
-                        <CheckCircle2 size={12} />
-                        {isLoading ? '处理中…' : '确认知晓'}
-                      </button>
+                      <>
+                        <button
+                          onClick={e => {
+                            e.stopPropagation();
+                            markProductViewed(product);
+                            setLocation(`/analysis/${product.id}`);
+                          }}
+                          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-white border border-red-200 text-red-700 hover:bg-red-50 transition-colors"
+                        >
+                          <ArrowRight size={12} />
+                          了解详情
+                        </button>
+                        <button
+                          disabled={isLoading}
+                          onClick={async e => {
+                            e.stopPropagation();
+                            setPendingAction(actionKey);
+                            try {
+                              await sampleAction(product.id, 'acknowledge_rejection');
+                            } finally {
+                              setPendingAction(null);
+                            }
+                          }}
+                          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-red-100 text-red-700 hover:bg-red-200 transition-colors disabled:opacity-50"
+                        >
+                          <CheckCircle2 size={12} />
+                          {isLoading ? '处理中…' : '确认知晓'}
+                        </button>
+                      </>
                     )}
                     {isSupplierChange && (
                       <button
@@ -324,101 +340,159 @@ const markGroupViewed = (groupId: string) => {
         </div>
       )}
 
-      {/* Main 4-column board */}
-      <div className="grid grid-cols-1 lg:grid-cols-4 gap-5">
-        {MAIN_GROUPS.map(group => {
-          const groupProducts = filteredProducts
-            .filter(p => group.statuses.includes(p.status))
-            .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
-
-          return (
-            <div
-              key={group.id}
-              onClick={() => markGroupViewed(group.id)}
-              className={`rounded-2xl border ${group.color} p-4 flex flex-col h-[calc(100vh-13rem)]`}
-            >
-              {/* Column header */}
-              <div className="flex items-center justify-between mb-4 px-1">
-                <div className="flex items-center gap-2">
-                  <span className={`w-2 h-2 rounded-full ${group.dotColor}`} />
-                  <h3 className={`font-semibold text-sm ${group.headerColor}`}>{group.title}</h3>
-                  {(() => {
-                    const latest = Math.max(...groupProducts.map(p => new Date(p.updatedAt).getTime()), 0);
-                    const viewed = groupLastViewed[group.id];
-                    const hasUnread = latest > 0 && (!viewed || latest > new Date(viewed).getTime());
-                    return hasUnread ? <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse" /> : null;
-                  })()}
-                </div>
-                <span className="bg-white text-slate-600 px-2.5 py-0.5 rounded-full text-xs font-bold shadow-sm border border-slate-100">
+      {/* Status switcher */}
+      <div className="space-y-4">
+        <div className="flex flex-wrap gap-2 rounded-2xl border border-slate-200 bg-white p-2 shadow-sm">
+          {MAIN_GROUPS.map(group => {
+            const groupProducts = productsForGroup(group);
+            const isActive = group.id === activeGroup.id;
+            return (
+              <button
+                key={group.id}
+                onClick={() => setActiveGroupId(group.id)}
+                className={`flex min-w-[8.5rem] flex-1 items-center justify-between gap-3 rounded-xl px-4 py-3 text-left transition-all ${
+                  isActive
+                    ? 'bg-slate-900 text-white shadow-sm'
+                    : 'bg-slate-50 text-slate-600 hover:bg-slate-100'
+                }`}
+              >
+                <span className="flex items-center gap-2">
+                  <span className={`w-2 h-2 rounded-full ${isActive ? 'bg-white' : group.dotColor}`} />
+                  <span className="text-sm font-semibold">{group.title}</span>
+                  {groupProducts.some(isProductUnread) && <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse" />}
+                </span>
+                <span className={`rounded-full px-2.5 py-0.5 text-xs font-bold ${
+                  isActive ? 'bg-white/15 text-white' : 'bg-white text-slate-600 border border-slate-200'
+                }`}>
                   {groupProducts.length}
                 </span>
-              </div>
+              </button>
+            );
+          })}
+        </div>
 
-              {/* Cards */}
-              <div className="flex-1 overflow-y-auto space-y-3 pr-1 custom-scrollbar">
-                {groupProducts.length === 0 ? (
-                  <div className="h-32 flex items-center justify-center text-slate-400 text-sm border-2 border-dashed border-slate-200 rounded-xl">
-                    {isFiltering ? '无匹配结果' : '暂无数据'}
-                  </div>
-                ) : (
-                  groupProducts.map(product => {
-                    const reviewSubLabel = group.showReviewSubLabel
-                      ? getReviewSubLabel(product.status, product.supplierChangeCount ?? 0)
-                      : null;
+        <div className={`rounded-2xl border ${activeGroup.color} p-4 min-h-[calc(100vh-17rem)]`}>
+          <div className="flex items-center justify-between mb-4 px-1">
+            <div className="flex items-center gap-2">
+              <span className={`w-2 h-2 rounded-full ${activeGroup.dotColor}`} />
+              <h3 className={`font-semibold text-sm ${activeGroup.headerColor}`}>{activeGroup.title}</h3>
+              {activeGroupProducts.some(isProductUnread) && <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse" />}
+            </div>
+            <span className="bg-white text-slate-600 px-2.5 py-0.5 rounded-full text-xs font-bold shadow-sm border border-slate-100">
+              {activeGroupProducts.length}
+            </span>
+          </div>
 
-                    return (
-                      <div
-                        key={product.id}
-                        onClick={() => { markProductViewed(product.id); setLocation(getCardPath(product.status, product.id)); }}
-                        className="bg-white p-4 rounded-xl shadow-sm border border-slate-200 hover:border-primary/40 hover:shadow-md transition-all cursor-pointer group"
-                      >
-                        <div className="flex justify-between items-start mb-2">
-                          {reviewSubLabel ? (
-                            <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold border ${reviewSubLabel.className}`}>
-                              {reviewSubLabel.label}
-                            </span>
-                          ) : (
-                            <StatusBadge status={product.status} />
-                          )}
-                          <span className="text-xs text-slate-400 shrink-0 ml-1">
-                            {format(new Date(product.updatedAt), 'MM-dd')}
-                          </span>
-                        </div>
-                        <div className="flex items-start gap-2 mb-1">
-                          <h4 className="font-bold text-slate-800 group-hover:text-primary transition-colors text-sm leading-snug line-clamp-2 flex items-center gap-1.5">
-                            <span className="flex-1">{product.productName}</span>{isProductUnread(product) && <span className="w-2 h-2 rounded-full bg-red-500 shrink-0" title="有新更新" />}
-                          </h4>
-                          <ProductImage
-                            hostedImageUrl={product.hostedImageUrl}
-                            imageUrl={product.imageUrl}
-                            size="md"
-                            alt={product.productName}
-                          />
-                        </div>
-                        {(product.supplierChangeCount ?? 0) > 0 && (
-                          <div className="mb-1">
-                            <SupplierChangeBadge count={product.supplierChangeCount ?? 0} />
+          {activeGroupProducts.length === 0 ? (
+            <div className="h-48 flex items-center justify-center text-slate-400 text-sm border-2 border-dashed border-slate-200 rounded-xl bg-white/50">
+              {isFiltering ? '无匹配结果' : '暂无数据'}
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3">
+              {activeGroupProducts.map(product => {
+                const reviewSubLabel = activeGroup.showReviewSubLabel
+                  ? getReviewSubLabel(product.status, product.supplierChangeCount ?? 0)
+                  : null;
+                const showPendingHelpers = activeGroup.id === 'pending';
+                const missingFields = showPendingHelpers ? getMissingEntryFields(product) : [];
+                const purchaseLink = showPendingHelpers ? normalizeLink(product.link1688) : null;
+
+                return (
+                  <div
+                    key={product.id}
+                    onClick={() => { markProductViewed(product); setLocation(getCardPath(product.status, product.id)); }}
+                    className="relative bg-white p-4 rounded-xl shadow-sm border border-slate-200 hover:border-primary/40 hover:shadow-md transition-all cursor-pointer group"
+                  >
+                    {isProductUnread(product) && (
+                      <span className="absolute top-3 right-3 inline-flex min-w-[18px] h-[18px] items-center justify-center rounded-full bg-red-500 px-1 text-[11px] font-bold leading-none text-white shadow-sm z-10">
+                        1
+                      </span>
+                    )}
+                    <div className="flex justify-between items-start mb-2">
+                      {reviewSubLabel ? (
+                        <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold border ${reviewSubLabel.className}`}>
+                          {reviewSubLabel.label}
+                        </span>
+                      ) : (
+                        <StatusBadge status={product.status} />
+                      )}
+                      <span className="text-xs text-slate-400 shrink-0 ml-1">
+                        {format(new Date(product.updatedAt), 'MM-dd')}
+                      </span>
+                    </div>
+                    <div className="flex items-start gap-2 mb-1">
+                      <h4 className="font-bold text-slate-800 group-hover:text-primary transition-colors text-sm leading-snug line-clamp-2 flex items-center gap-1.5">
+                        <span className="flex-1 pr-5">{product.productName}</span>
+                      </h4>
+                      <ProductImage
+                        hostedImageUrl={product.hostedImageUrl}
+                        imageUrl={product.imageUrl}
+                        size="md"
+                        alt={product.productName}
+                      />
+                    </div>
+                    {(product.supplierChangeCount ?? 0) > 0 && (
+                      <div className="mb-1">
+                        <SupplierChangeBadge count={product.supplierChangeCount ?? 0} />
+                      </div>
+                    )}
+                    <p className="text-xs text-slate-500 mb-3 line-clamp-1">
+                      {product.supplierName} · {product.productSource}{product.spuCode ? ` · SPU ${product.spuCode}` : ''}
+                    </p>
+                    <div className="mb-3">
+                      <TaskContextPanel taskId={(product as any).taskId} compact />
+                    </div>
+                    {showPendingHelpers && (
+                      <div className="mb-3 space-y-2">
+                        {product.status === 'returned' && product.managerComment && (
+                          <div className="rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-2 text-xs text-amber-800">
+                            <div className="font-semibold mb-0.5">退回补充原因</div>
+                            <div className="line-clamp-3">{product.managerComment}</div>
                           </div>
                         )}
-                        <p className="text-xs text-slate-500 mb-3 line-clamp-1">
-                          {product.supplierName} · {product.productSource}
-                        </p>
-                        <div className="flex items-center justify-between pt-3 border-t border-slate-100">
-                          <div className="text-sm font-semibold text-slate-700">
-                            ¥{product.purchasePrice?.toFixed(2) || '--'}
-                          </div>
-                          <div className="text-primary opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-1 text-xs font-medium">
-                            查看 <ArrowRight size={13} />
-                          </div>
+                        <div className={`rounded-lg border px-2.5 py-2 text-xs ${
+                          missingFields.length > 0
+                            ? 'border-orange-100 bg-orange-50 text-orange-700'
+                            : 'border-emerald-100 bg-emerald-50 text-emerald-700'
+                        }`}>
+                          <span className="font-semibold">
+                            {missingFields.length > 0 ? `还缺 ${missingFields.length} 项：` : '必填项已完整'}
+                          </span>
+                          {missingFields.length > 0 && (
+                            <span>
+                              {missingFields.slice(0, 5).join('、')}
+                              {missingFields.length > 5 ? ` 等${missingFields.length}项` : ''}
+                            </span>
+                          )}
                         </div>
+                        <button
+                          type="button"
+                          disabled={!purchaseLink}
+                          onClick={e => {
+                            e.stopPropagation();
+                            if (purchaseLink) window.open(purchaseLink, '_blank', 'noopener,noreferrer');
+                          }}
+                          className="inline-flex items-center gap-1.5 rounded-lg border border-blue-100 bg-blue-50 px-2.5 py-1.5 text-xs font-semibold text-blue-700 transition-colors hover:bg-blue-100 disabled:cursor-not-allowed disabled:border-slate-100 disabled:bg-slate-50 disabled:text-slate-400"
+                        >
+                          <ExternalLink size={12} />
+                          {purchaseLink ? '联系商家' : '暂无采购链接'}
+                        </button>
                       </div>
-                    );
-                  })
-                )}
-              </div>
+                    )}
+                    <div className="flex items-center justify-between pt-3 border-t border-slate-100">
+                      <div className="text-sm font-semibold text-slate-700">
+                        ¥{product.purchasePrice?.toFixed(2) || '--'}
+                      </div>
+                      <div className="text-primary opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-1 text-xs font-medium">
+                        查看 <ArrowRight size={13} />
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
             </div>
-          );
-        })}
+          )}
+        </div>
       </div>
 
       {/* Ended section (completed + rejected) — collapsed by default */}
@@ -431,11 +505,6 @@ const markGroupViewed = (groupId: string) => {
             {showEnded ? <ChevronDown size={15} className="text-slate-400" /> : <ChevronRight size={15} className="text-slate-400" />}
             <span className="text-sm font-semibold text-slate-500">已结束</span>
             <span className="text-xs text-slate-400">（已拒绝 / 已入库）</span>
-            {endedUnreadCount > 0 && (
-              <span className="inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full bg-red-500 text-white text-[11px] font-bold leading-none">
-                {endedUnreadCount > 99 ? '99+' : endedUnreadCount}
-              </span>
-            )}
           </div>
           <span className="bg-white text-slate-500 px-2.5 py-0.5 rounded-full text-xs font-bold shadow-sm border border-slate-100">
             {endedProducts.length}
@@ -466,8 +535,11 @@ const markGroupViewed = (groupId: string) => {
                       {product.productName}
                     </h4>
                     <p className="text-xs text-slate-400 line-clamp-1">
-                      {product.supplierName} · {product.productSource}
+                      {product.supplierName} · {product.productSource}{product.spuCode ? ` · SPU ${product.spuCode}` : ''}
                     </p>
+                    <div className="mt-2">
+                      <TaskContextPanel taskId={(product as any).taskId} compact />
+                    </div>
                   </div>
                 ))}
               </div>

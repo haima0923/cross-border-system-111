@@ -1,5 +1,5 @@
-import React, { useState, useMemo, useEffect } from 'react';
-import { useAppStore, SampleSkuLine, SampleOption } from '@/context/StoreContext';
+import React, { memo, useCallback, useState, useMemo, useEffect } from 'react';
+import { useAppStore, SampleSkuLine, SampleOption, SkuAnomalyHistoryEntry } from '@/context/StoreContext';
 import { StatusBadge } from '@/components/shared/StatusBadge';
 import { HistoryLog, HistoryLogEntry } from '@/components/shared/HistoryLog';
 import { ProductImage } from '@/components/shared/ProductImage';
@@ -10,6 +10,8 @@ import {
   Clock, User,
 } from 'lucide-react';
 import { cn } from '@/components/shared/StatusBadge';
+import { isProductUnread as hasUnreadEvent, markProductUnreadRead } from '@/lib/unreadEvents';
+import { TaskContextPanel } from '@/components/shared/TaskContext';
 
 // 异常类型配置
 const ANOMALY_TYPES = [
@@ -21,6 +23,135 @@ const ANOMALY_TYPES = [
   { value: 'other', label: '其他' },
 ] as const;
 
+const ANOMALY_HANDLING_METHOD_LABELS: Record<string, string> = {
+  reinspect: '补处理后重新验货',
+  replace: '补发/换货',
+  accept: '接受现状',
+  terminate: '终止采购',
+};
+
+function anomalyTypeLabel(value?: string | string[] | null) {
+  const raw = Array.isArray(value) ? value[0] : value;
+  if (!raw) return null;
+  return ANOMALY_TYPES.find(t => t.value === raw)?.label || raw;
+}
+
+function anomalyHandlingMethodLabel(value?: string | null) {
+  if (!value) return null;
+  return ANOMALY_HANDLING_METHOD_LABELS[value] || value;
+}
+
+const ANOMALY_HISTORY_STATUS_LABELS: Record<SkuAnomalyHistoryEntry['status'], string> = {
+  reported: '已上报',
+  handling: '经理已给意见',
+  processing: '执行中',
+  resolved: '已处理完成',
+};
+
+function formatAnomalyTime(value?: string | null) {
+  if (!value) return '';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  return format(date, 'MM-dd HH:mm');
+}
+
+function getSkuAnomalyHistory(sku: SampleSkuLine): SkuAnomalyHistoryEntry[] {
+  if (Array.isArray(sku.anomalyHistory) && sku.anomalyHistory.length > 0) {
+    return sku.anomalyHistory;
+  }
+  if (!sku.anomalyType && !sku.anomalyNote && !sku.anomalyHandlingNote && !sku.anomalyReportedAt) {
+    return [];
+  }
+  const status = sku.anomalyResolvedAt
+    ? 'resolved'
+    : sku.purchaseStatus === 'anomaly_processing'
+      ? 'processing'
+      : sku.anomalyHandlingNote || sku.anomalyHandledAt || sku.purchaseStatus === 'anomaly_handling'
+        ? 'handling'
+        : 'reported';
+  return [{
+    id: `${sku.id}-legacy-anomaly-1`,
+    round: 1,
+    status,
+    anomalyType: sku.anomalyType ?? null,
+    anomalyTypes: sku.anomalyType ? [sku.anomalyType] : null,
+    anomalyNote: sku.anomalyNote ?? null,
+    reportedAt: sku.anomalyReportedAt ?? null,
+    reportedBy: sku.anomalyReportedBy ?? null,
+    handlingMethod: sku.anomalyHandlingMethod ?? null,
+    handlingNote: sku.anomalyHandlingNote ?? null,
+    handledAt: sku.anomalyHandledAt ?? null,
+    handledBy: sku.anomalyHandledBy ?? null,
+    resolvedAt: sku.anomalyResolvedAt ?? null,
+    resolvedBy: null,
+  }];
+}
+
+const AnomalyHistoryPanel = memo(function AnomalyHistoryPanel({
+  history,
+}: {
+  history: SkuAnomalyHistoryEntry[];
+}) {
+  const [expanded, setExpanded] = useState(false);
+  if (history.length === 0) return null;
+
+  const latest = history[history.length - 1];
+  const latestType = anomalyTypeLabel(latest.anomalyTypes ?? latest.anomalyType);
+  const latestStatus = ANOMALY_HISTORY_STATUS_LABELS[latest.status] || latest.status;
+
+  return (
+    <div className="max-w-[240px] rounded-lg border border-red-200 bg-red-50 text-red-700">
+      <button
+        type="button"
+        onClick={() => setExpanded(v => !v)}
+        className="w-full px-2 py-1.5 text-left text-[10px] font-medium flex items-center justify-between gap-2"
+      >
+        <span className="truncate">
+          异常申报（{history.length}） · 最新第{latest.round}次{latestType ? `：${latestType}` : ''}
+        </span>
+        <span className="shrink-0 text-red-500">{expanded ? '收起' : '展开'}</span>
+      </button>
+      {expanded && (
+        <div className="border-t border-red-200 px-2 py-1.5 space-y-2 text-[10px]">
+          {history.map((item) => {
+            const anomalyLabel = anomalyTypeLabel(item.anomalyTypes ?? item.anomalyType);
+            const methodLabel = anomalyHandlingMethodLabel(item.handlingMethod);
+            return (
+              <div key={item.id} className="rounded bg-white/70 border border-red-100 px-2 py-1.5 space-y-0.5">
+                <div className="font-semibold flex justify-between gap-2">
+                  <span>第{item.round}次申报</span>
+                  <span>{ANOMALY_HISTORY_STATUS_LABELS[item.status] || item.status}</span>
+                </div>
+                {item.reportedAt && (
+                  <div className="text-red-500">
+                    上报：{formatAnomalyTime(item.reportedAt)}{item.reportedBy ? ` · ${item.reportedBy}` : ''}
+                  </div>
+                )}
+                {anomalyLabel && <div>类型：{anomalyLabel}</div>}
+                {item.anomalyNote && <div className="whitespace-normal break-words">备注：{item.anomalyNote}</div>}
+                {(item.handlingNote || methodLabel) && (
+                  <div className="mt-1 rounded border border-amber-200 bg-amber-50 px-1.5 py-1 text-amber-700">
+                    <div className="font-medium">经理处理意见</div>
+                    {methodLabel && <div>方案：{methodLabel}</div>}
+                    {item.handlingNote && <div className="whitespace-normal break-words">说明：{item.handlingNote}</div>}
+                    {item.handledAt && (
+                      <div className="text-amber-600">
+                        {formatAnomalyTime(item.handledAt)}{item.handledBy ? ` · ${item.handledBy}` : ''}
+                      </div>
+                    )}
+                  </div>
+                )}
+                {item.startedAt && <div className="text-orange-600">开始执行：{formatAnomalyTime(item.startedAt)}</div>}
+                {item.resolvedAt && <div className="text-emerald-600">处理完成：{formatAnomalyTime(item.resolvedAt)}</div>}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+});
+
 // SKU状态标签
 const SKU_STATUS_CONFIG: Record<string, { label: string; color: string; bg: string }> = {
   pending_purchase:   { label: '待下单',    color: 'text-slate-600',   bg: 'bg-slate-100' },
@@ -30,6 +161,8 @@ const SKU_STATUS_CONFIG: Record<string, { label: string; color: string; bg: stri
   passed:             { label: '已通过',    color: 'text-green-600',  bg: 'bg-green-50' },
   completed:          { label: '已入库',    color: 'text-emerald-700', bg: 'bg-emerald-100' },
   anomaly_reported:   { label: '异常已报',  color: 'text-red-600',    bg: 'bg-red-50' },
+  anomaly_handling:   { label: '待执行处理', color: 'text-amber-700', bg: 'bg-amber-50' },
+  anomaly_processing: { label: '异常处理中', color: 'text-orange-600', bg: 'bg-orange-50' },
   anomaly_resolved:   { label: '异常已解决', color: 'text-yellow-600', bg: 'bg-yellow-50' },
   terminated:         { label: '已终止',    color: 'text-slate-500',  bg: 'bg-slate-100' },
 };
@@ -47,13 +180,15 @@ function SkuStatusBadge({ status }: { status: string }) {
 }
 
 // SKU行组件
-function SkuRow({
+const SkuRow = memo(function SkuRow({
   sku,
+  productStatus,
   onAction,
   role,
   loading,
 }: {
   sku: SampleSkuLine;
+  productStatus: string;
   onAction: (skuLineId: string, action: string, data?: Record<string, unknown>) => Promise<void>;
   role: string;
   loading: boolean;
@@ -61,25 +196,28 @@ function SkuRow({
   const [showAnomalyForm, setShowAnomalyForm] = useState(false);
   const [anomalyType, setAnomalyType] = useState('');
   const [anomalyNote, setAnomalyNote] = useState('');
+  const [managerNote, setManagerNote] = useState('');
   const [localLoading, setLocalLoading] = useState(false);
 
   const status = sku.purchaseStatus || 'pending_purchase';
-  const isAnomaly = status === 'anomaly_reported';
+  const isAnomaly = status.startsWith('anomaly_');
+  const waitingForManager = status === 'anomaly_reported';
+  const anomalyHistory = useMemo(() => getSkuAnomalyHistory(sku), [sku]);
+  const latestAnomaly = anomalyHistory[anomalyHistory.length - 1];
+  const handlingMethodLabel = anomalyHandlingMethodLabel(latestAnomaly?.handlingMethod ?? sku.anomalyHandlingMethod);
+  const latestHandlingNote = latestAnomaly?.handlingNote ?? sku.anomalyHandlingNote;
+  const hasAnomalyReport = anomalyHistory.length > 0;
   
   // 根据状态和角色获取可执行操作
   const actions = useMemo(() => {
-    // 经理端：异常状态显示解决异常按钮
     if (role === 'product_manager') {
-      if (status === 'anomaly_reported') {
-        return [
-          { action: 'resolve_anomaly', label: '解决异常', primary: true },
-        ];
-      }
       return [];
     }
-    
-    // 专员端：正常的采购流程操作
+
     if (role === 'product_specialist') {
+      if (status === 'anomaly_handling') {
+        return [{ action: 'start_anomaly_handling', label: '去执行', primary: true }];
+      }
       switch (status) {
         case 'pending_purchase':
           return [{ action: 'confirm_order', label: '确认下单', primary: true }];
@@ -92,6 +230,8 @@ function SkuRow({
             { action: 'pass_inspection', label: '验货通过', primary: true },
             { action: 'report_anomaly', label: '报告异常', primary: false, danger: true },
           ];
+        case 'anomaly_processing':
+          return [{ action: 'resolve_anomaly', label: '处理完成', primary: true }];
         case 'anomaly_resolved':
           return [{ action: 'start_inspection', label: '重新验货', primary: true }];
         default:
@@ -100,7 +240,7 @@ function SkuRow({
     }
     
     return [];
-  }, [status, role]);
+  }, [status, role, productStatus]);
 
   const handleAction = async (action: string, data?: Record<string, unknown>) => {
     setLocalLoading(true);
@@ -116,7 +256,19 @@ function SkuRow({
 
   const handleReportAnomaly = () => {
     if (!anomalyType || !anomalyNote.trim()) return;
-    handleAction('report_anomaly', { anomalyType, anomalyNote: anomalyNote.trim() });
+    handleAction('report_anomaly', {
+      anomalyTypes: [anomalyType],
+      anomalyNote: anomalyNote.trim(),
+    });
+  };
+
+  const handleAcknowledgeAnomaly = async () => {
+    if (!managerNote.trim()) return;
+    await handleAction('acknowledge_anomaly', {
+      anomalyHandlingMethod: 'reinspect',
+      anomalyHandlingNote: managerNote.trim(),
+    });
+    setManagerNote('');
   };
 
   const priceDisplay = sku.unitPrice ? '¥' + sku.unitPrice.toFixed(2) : '-';
@@ -144,6 +296,9 @@ function SkuRow({
       {/* 名称 */}
       <td className="py-2 px-2">
         <div className="font-medium text-sm text-slate-800">{sku.skuName || '未命名SKU'}</div>
+        {sku.skuCode && (
+          <div className="mt-0.5 text-[10px] font-semibold text-slate-500">SKU {sku.skuCode}</div>
+        )}
         {sku.attributes && Object.keys(sku.attributes).length > 0 && (
           <div className="text-xs text-slate-500 flex flex-wrap gap-1 mt-0.5">
             {Object.entries(sku.attributes).map(([k, v]) => (
@@ -177,22 +332,41 @@ function SkuRow({
       
       {/* 操作 */}
       <td className="py-2 px-2 min-w-[180px]">
-        {isAnomaly ? (
-          <div className="text-xs text-red-500">
-            <div className="font-medium">等待经理处置</div>
-            {sku.anomalyType && (
-              <div className="text-[10px] text-slate-500 mt-0.5">
-                {ANOMALY_TYPES.find(t => t.value === sku.anomalyType)?.label || sku.anomalyType}
+        <div className="space-y-1.5">
+          {hasAnomalyReport && (
+            <AnomalyHistoryPanel history={anomalyHistory} />
+          )}
+          {role === 'product_manager' && waitingForManager ? (
+            <div className="space-y-1.5">
+              <textarea
+                value={managerNote}
+                onChange={e => setManagerNote(e.target.value)}
+                placeholder="请填写该 SKU 的处理意见"
+                className="w-full min-w-[160px] text-xs border border-red-200 rounded px-2 py-1.5 resize-none h-14 bg-white"
+              />
+              <button
+                type="button"
+                onClick={handleAcknowledgeAnomaly}
+                disabled={loading || localLoading || !managerNote.trim()}
+                className="w-full px-2 py-1 text-xs font-medium rounded-lg bg-green-600 text-white hover:bg-green-700 disabled:opacity-50"
+              >
+                {localLoading || loading ? '处理中...' : '确认该SKU处理方案'}
+              </button>
+            </div>
+          ) : waitingForManager ? (
+            <div className="text-xs text-red-500 font-medium">
+              等待经理处置
+            </div>
+          ) : actions.length > 0 ? (
+            <>
+            {(latestHandlingNote || handlingMethodLabel) && (
+              <div className="text-[10px] rounded bg-amber-50 border border-amber-200 text-amber-700 px-2 py-1 max-w-[220px]">
+                <div className="font-medium">经理处理意见</div>
+                {handlingMethodLabel && <div>方案：{handlingMethodLabel}</div>}
+                {latestHandlingNote && <div className="whitespace-normal break-words">说明：{latestHandlingNote}</div>}
               </div>
             )}
-            {sku.anomalyNote && (
-              <div className="text-[10px] text-slate-500 italic truncate max-w-[150px]">
-                {sku.anomalyNote}
-              </div>
-            )}
-          </div>
-        ) : actions.length > 0 ? (
-          <div className="flex flex-wrap gap-1">
+            <div className="flex flex-wrap gap-1">
             {actions.map(a => (
               a.action === 'report_anomaly' ? (
                 !showAnomalyForm ? (
@@ -256,44 +430,88 @@ function SkuRow({
                 </button>
               )
             ))}
-          </div>
-        ) : (
-          <span className="text-xs text-slate-400">-</span>
-        )}
+            </div>
+            </>
+          ) : (
+            !hasAnomalyReport && <span className="text-xs text-slate-400">-</span>
+          )}
+        </div>
       </td>
     </tr>
   );
-}
+}, (prev, next) =>
+  prev.sku === next.sku &&
+  prev.productStatus === next.productStatus &&
+  prev.onAction === next.onAction &&
+  prev.role === next.role &&
+  prev.loading === next.loading
+);
 
 // 经理异常处置面板
-function ManagerAnomalyPanel({
+const ManagerAnomalyPanel = memo(function ManagerAnomalyPanel({
   sku,
   productId,
+  productStatus,
   onAction,
   loading,
 }: {
   sku: SampleSkuLine;
   productId: string;
+  productStatus: string;
   onAction: (productId: string, skuLineId: string, action: string, data?: Record<string, unknown>) => Promise<void>;
   loading: boolean;
 }) {
-  const [action, setAction] = useState<'resolve' | 'terminate' | ''>('');
   const [note, setNote] = useState('');
   const [localLoading, setLocalLoading] = useState(false);
+  const skuStatus = sku.purchaseStatus || '';
+  const anomalyHistory = useMemo(() => getSkuAnomalyHistory(sku), [sku]);
+  const latestAnomaly = anomalyHistory[anomalyHistory.length - 1];
+  const anomalyLabel = anomalyTypeLabel(latestAnomaly?.anomalyTypes ?? latestAnomaly?.anomalyType ?? sku.anomalyType);
 
-  const handleSubmit = async () => {
-    if (!action) return;
-    setLocalLoading(true);
-    try {
-      await onAction(productId, sku.id, action === 'resolve' ? 'resolve_anomaly' : 'terminate_purchase', {
-        note: note.trim(),
-      });
-      setAction('');
-      setNote('');
-    } finally {
-      setLocalLoading(false);
-    }
-  };
+  if (skuStatus === 'anomaly_resolved') {
+    return (
+      <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 space-y-2">
+        <div className="text-sm font-medium text-amber-800">异常已处理 — {sku.skuName || '未命名'}</div>
+        <textarea
+          value={note}
+          onChange={e => setNote(e.target.value)}
+          placeholder="终止采购时必填原因"
+          className="w-full text-xs border border-slate-200 rounded px-2 py-1.5 resize-none h-14 bg-white"
+        />
+        <div className="flex gap-2">
+          <button
+            type="button"
+            disabled={loading || localLoading}
+            onClick={async () => {
+              setLocalLoading(true);
+              try { await onAction(productId, sku.id, 'accept_goods', {}); } finally { setLocalLoading(false); }
+            }}
+            className="flex-1 py-1.5 text-xs font-medium rounded-lg bg-emerald-600 text-white disabled:opacity-50"
+          >
+            接受入库
+          </button>
+          <button
+            type="button"
+            disabled={loading || localLoading || !note.trim()}
+            onClick={async () => {
+              setLocalLoading(true);
+              try {
+                await onAction(productId, sku.id, 'terminate_order', { comment: note.trim() });
+                setNote('');
+              } finally { setLocalLoading(false); }
+            }}
+            className="flex-1 py-1.5 text-xs font-medium rounded-lg bg-slate-600 text-white disabled:opacity-50"
+          >
+            终止采购
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  if (skuStatus !== 'anomaly_reported') {
+    return null;
+  }
 
   return (
     <div className="bg-red-50 border border-red-200 rounded-xl p-3 space-y-2">
@@ -302,65 +520,45 @@ function ManagerAnomalyPanel({
         <span className="font-medium text-red-700">SKU异常: {sku.skuName || '未命名'}</span>
       </div>
       <div className="text-xs text-slate-600 pl-6">
-        {sku.anomalyType && <span>类型: {ANOMALY_TYPES.find(t => t.value === sku.anomalyType)?.label || sku.anomalyType}</span>}
-        {sku.anomalyNote && <p className="mt-0.5 italic">"{sku.anomalyNote}"</p>}
+        {anomalyLabel && <span>类型: {anomalyLabel}</span>}
+        {(latestAnomaly?.anomalyNote || sku.anomalyNote) && <p className="mt-0.5 italic">"{latestAnomaly?.anomalyNote || sku.anomalyNote}"</p>}
       </div>
-      <div className="flex gap-1 pl-6 pt-1">
+      <div className="pl-6 space-y-1.5">
+        <textarea
+          value={note}
+          onChange={e => setNote(e.target.value)}
+          placeholder="请填写该 SKU 的处理意见（必填）"
+          className="w-full text-xs border border-slate-200 rounded px-2 py-1.5 resize-none h-14 bg-white"
+        />
         <button
-          onClick={() => setAction('resolve')}
-          className={cn(
-            "px-2 py-1 text-xs rounded-lg border transition-colors",
-            action === 'resolve'
-              ? "bg-green-500 text-white border-green-500"
-              : "border-green-300 text-green-600 hover:bg-green-50"
-          )}
+          type="button"
+          disabled={loading || localLoading || !note.trim()}
+          onClick={async () => {
+            setLocalLoading(true);
+            try {
+              await onAction(productId, sku.id, 'acknowledge_anomaly', {
+                anomalyHandlingMethod: 'reinspect',
+                anomalyHandlingNote: note.trim(),
+              });
+              setNote('');
+            } finally {
+              setLocalLoading(false);
+            }
+          }}
+          className="w-full py-1.5 text-xs font-medium rounded-lg bg-green-600 text-white hover:bg-green-700 disabled:opacity-50"
         >
-          重新验货
-        </button>
-        <button
-          onClick={() => setAction('terminate')}
-          className={cn(
-            "px-2 py-1 text-xs rounded-lg border transition-colors",
-            action === 'terminate'
-              ? "bg-slate-500 text-white border-slate-500"
-              : "border-slate-300 text-slate-600 hover:bg-slate-50"
-          )}
-        >
-          终止采购
+          {localLoading || loading ? '处理中...' : '确认该SKU处理方案'}
         </button>
       </div>
-      {action && (
-        <div className="pl-6 space-y-1.5">
-          <textarea
-            value={note}
-            onChange={e => setNote(e.target.value)}
-            placeholder={action === 'resolve' ? "备注（可选）" : "终止原因"}
-            className="w-full text-xs border border-slate-200 rounded px-2 py-1.5 resize-none h-14 bg-white"
-          />
-          <div className="flex gap-1">
-            <button
-              onClick={handleSubmit}
-              disabled={loading || localLoading || (action === 'terminate' && !note.trim())}
-              className={cn(
-                "flex-1 py-1.5 text-xs font-medium rounded-lg text-white",
-                action === 'resolve' ? "bg-green-500 hover:bg-green-600" : "bg-slate-500 hover:bg-slate-600",
-                (loading || localLoading || (action === 'terminate' && !note.trim())) && "opacity-50"
-              )}
-            >
-              {localLoading || loading ? '处理中...' : (action === 'resolve' ? '确认重新验货' : '确认终止')}
-            </button>
-            <button
-              onClick={() => { setAction(''); setNote(''); }}
-              className="px-3 py-1.5 text-xs font-medium rounded-lg border border-slate-200 text-slate-600 hover:bg-white"
-            >
-              取消
-            </button>
-          </div>
-        </div>
-      )}
     </div>
   );
-}
+}, (prev, next) =>
+  prev.sku === next.sku &&
+  prev.productId === next.productId &&
+  prev.productStatus === next.productStatus &&
+  prev.onAction === next.onAction &&
+  prev.loading === next.loading
+);
 
 // 产品卡片组件
 function ProductCard({
@@ -384,6 +582,11 @@ function ProductCard({
 }) {
   const [expanded, setExpanded] = useState(true);
   const [loading, setLoading] = useState(false);
+  const onSkuActionForProduct = useCallback(
+    (skuLineId: string, action: string, data?: Record<string, unknown>) =>
+      onSkuAction(product.id, skuLineId, action, data),
+    [onSkuAction, product.id],
+  );
 
   // 获取经理选中的方案（selectedAt不为空）
   const selectedOptions = sampleOptions.filter(
@@ -398,14 +601,17 @@ function ProductCard({
   // 统计各状态SKU数量
   const skuStats = useMemo(() => {
     const passed = selectedSkus.filter(s => s.purchaseStatus === 'passed').length;
-    const inspecting = selectedSkus.filter(s => ['inspecting', 'anomaly_reported', 'anomaly_resolved'].includes(s.purchaseStatus || '')).length;
+    const inspecting = selectedSkus.filter(s => ['inspecting', 'anomaly_reported', 'anomaly_handling', 'anomaly_processing', 'anomaly_resolved'].includes(s.purchaseStatus || '')).length;
     const anomalyReported = selectedSkus.filter(s => s.purchaseStatus === 'anomaly_reported');
-    return { total: selectedSkus.length, passed, inspecting, anomalyReported };
+    const anomalyActive = selectedSkus.filter(s => ['anomaly_reported', 'anomaly_handling', 'anomaly_processing'].includes(s.purchaseStatus || ''));
+    return { total: selectedSkus.length, passed, inspecting, anomalyReported, anomalyActive };
   }, [selectedSkus]);
 
   // 是否可以入库（所有SKU都是passed或completed）
-  const canComplete = selectedSkus.length > 0 && 
+  const allSkusPassed = selectedSkus.length > 0 &&
     selectedSkus.every(s => ['passed', 'completed'].includes(s.purchaseStatus || ''));
+  const canComplete = allSkusPassed &&
+    (product.status === 'goods_inspected' || product.status === 'inspecting');
 
   // 获取历史日志
   const historyLog: HistoryLogEntry[] = (product as any).historyLog || [];
@@ -423,7 +629,7 @@ function ProductCard({
   return (
     <div className={cn(
       "bg-white rounded-xl border shadow-sm",
-      skuStats.anomalyReported.length > 0 ? "border-red-300" : "border-slate-200"
+      skuStats.anomalyActive.length > 0 ? "border-red-300" : "border-slate-200"
     )}>
       {/* 卡片头部 */}
       <div 
@@ -431,7 +637,9 @@ function ProductCard({
         onClick={() => { onMarkViewed(); setExpanded(!expanded); }}
       >
         {isUnread && (
-          <span className="absolute top-3 left-3 w-2.5 h-2.5 rounded-full bg-red-500 animate-pulse z-10" />
+          <span className="absolute top-3 right-10 inline-flex min-w-[18px] h-[18px] items-center justify-center rounded-full bg-red-500 px-1 text-[11px] font-bold leading-none text-white shadow-sm z-10">
+            1
+          </span>
         )}
         <ProductImage
           hostedImageUrl={product.hostedImageUrl}
@@ -442,10 +650,15 @@ function ProductCard({
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 mb-1 flex-wrap">
             <StatusBadge status={product.status} />
-            {skuStats.anomalyReported.length > 0 && (
+            {product.spuCode && (
+              <span className="px-2 py-0.5 text-[10px] font-semibold rounded-full bg-slate-900 text-white">
+                SPU {product.spuCode}
+              </span>
+            )}
+            {skuStats.anomalyActive.length > 0 && (
               <span className="px-2 py-0.5 text-[10px] font-semibold rounded-full bg-red-100 text-red-700 border border-red-200 flex items-center gap-1">
                 <AlertTriangle size={10} />
-                {skuStats.anomalyReported.length}个SKU异常
+                {skuStats.anomalyActive.length}个SKU异常
               </span>
             )}
           </div>
@@ -457,6 +670,9 @@ function ProductCard({
               <span>暂无已选SKU</span>
             )}
             {skuStats.inspecting > 0 && <span className="text-orange-600 ml-2">验货中: {skuStats.inspecting}</span>}
+          </div>
+          <div className="mt-2">
+            <TaskContextPanel taskId={(product as any).taskId} compact />
           </div>
         </div>
         <button className="p-1 text-slate-400 hover:text-slate-600">
@@ -487,7 +703,8 @@ function ProductCard({
                     <SkuRow
                       key={sku.id}
                       sku={sku}
-                      onAction={(skuLineId, action, data) => onSkuAction(product.id, skuLineId, action, data)}
+                      productStatus={product.status}
+                      onAction={onSkuActionForProduct}
                       role={role}
                       loading={loading}
                     />
@@ -502,13 +719,16 @@ function ProductCard({
           )}
 
           {/* 经理异常处置面板 */}
-          {role === 'product_manager' && skuStats.anomalyReported.length > 0 && (
+          {role === 'product_manager' && selectedSkus.some(sku => sku.purchaseStatus === 'anomaly_resolved') && (
             <div className="space-y-2">
-              {skuStats.anomalyReported.map(sku => (
+              {selectedSkus
+                .filter(sku => sku.purchaseStatus === 'anomaly_resolved')
+                .map(sku => (
                 <ManagerAnomalyPanel
                   key={sku.id}
                   sku={sku}
                   productId={product.id}
+                  productStatus={product.status}
                   onAction={onSkuAction}
                   loading={loading}
                 />
@@ -581,22 +801,16 @@ export default function PurchasePool() {
 
   const [activeTab, setActiveTab] = useState<'pending' | 'active' | 'done'>('pending');
 
-  // ── 未读提醒逻辑 ──
-  const productViewedKey = (productId: string) => 'purchase_pool_pv_' + currentUser.id + '_' + productId;
-  const [productLastViewed, setProductLastViewed] = useState<Record<string, string | null>>(() => {
-    const init: Record<string, string | null> = {};
-    products.forEach(p => { init[p.id] = localStorage.getItem(productViewedKey(p.id)); });
-    return init;
-  });
-  const markProductViewed = (productId: string) => {
-    const now = new Date().toISOString();
-    localStorage.setItem(productViewedKey(productId), now);
-    setProductLastViewed(prev => ({ ...prev, [productId]: now }));
+  const [unreadVersion, setUnreadVersion] = useState(0);
+  const unreadRole = role === 'product_manager' || role === 'product_specialist' ? role : null;
+  const markProductViewed = (product: any) => {
+    if (!unreadRole) return;
+    markProductUnreadRead(product, unreadRole, currentUser.id, ['purchase-pool']);
+    setUnreadVersion(v => v + 1);
   };
-  const isProductUnread = (product: { id: string; updatedAt: string }) => {
-    const viewed = productLastViewed[product.id];
-    if (!viewed) return true;
-    return product.updatedAt > viewed;
+  const isProductUnread = (product: any) => {
+    unreadVersion;
+    return !!unreadRole && hasUnreadEvent(product, unreadRole, currentUser.id, ['purchase-pool']);
   };
 
   const purchaseProducts = products
@@ -714,6 +928,8 @@ export default function PurchasePool() {
               onSkuAction={handleSkuAction}
               onCompletePurchase={handleComplete}
               role={role}
+              isUnread={isProductUnread(product)}
+              onMarkViewed={() => markProductViewed(product)}
             />
           ))
         )}
