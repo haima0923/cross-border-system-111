@@ -713,7 +713,7 @@ export default function SamplingDetail() {
                           <th className="px-3 py-2 text-right font-medium">MOQ</th>
                           <th className="px-3 py-2 text-left font-medium">备注</th>
                           {/* 已采购状态及以上，显示异常列 */}
-                          {['ordered', 'arrived', 'evaluating', 'evaluated'].includes(orderStatus) && (
+                          {['arrived', 'evaluating', 'evaluated'].includes(orderStatus) && (
                             <th className="px-3 py-2 text-center font-medium">异常</th>
                           )}
                           {canModifySku(orderStatus) && <th className="px-3 py-2 w-8" />}
@@ -722,6 +722,7 @@ export default function SamplingDetail() {
                       <tbody>
                         {optSkus.map(sku => {
                           const isSkuReadOnly = isEvaluated || (orderStatus !== "evaluating") || isReadOnly;
+                          const canReportSamplingAnomaly = orderStatus === 'arrived' && !isReadOnly;
                           const hasAnomaly = !!sku.anomalyType;
                           return (
                             <Fragment key={sku.id}>
@@ -760,22 +761,23 @@ export default function SamplingDetail() {
                                   {sku.notes || '-'}
                                 </td>
                                 {/* 异常操作列 */}
-                                {['ordered', 'arrived', 'evaluating', 'evaluated'].includes(orderStatus) && (
+                                {['arrived', 'evaluating', 'evaluated'].includes(orderStatus) && (
                                   <td className="px-3 py-2 text-center">
                                     {hasAnomaly ? (
                                       <span className="inline-flex items-center gap-1 text-[10px] text-orange-600 font-medium">
                                         <AlertTriangle size={10} />
                                         已记录
                                       </span>
-                                    ) : (
+                                    ) : canReportSamplingAnomaly ? (
                                       <button
                                         onClick={() => setSamplingAnomaly({ skuId: sku.id, anomalyType: '', anomalyNote: '', anomalyImages: [] })}
                                         className="text-[10px] text-orange-500 hover:text-orange-700 font-medium flex items-center gap-0.5 mx-auto"
-                                        disabled={isSkuReadOnly && orderStatus !== 'evaluating' && orderStatus !== 'ordered' && orderStatus !== 'arrived'}
                                       >
                                         <AlertTriangle size={10} />
                                         报告异常
                                       </button>
+                                    ) : (
+                                      <span className="text-[10px] text-slate-400">-</span>
                                     )}
                                   </td>
                                 )}

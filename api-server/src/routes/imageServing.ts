@@ -23,6 +23,16 @@ const gcs = new Storage({
 
 const router: IRouter = Router();
 
+function isAllowedImageHost(hostname: string): boolean {
+  const host = hostname.toLowerCase();
+  return (
+    host === "1688.com" ||
+    host.endsWith(".1688.com") ||
+    host === "alicdn.com" ||
+    host.endsWith(".alicdn.com")
+  );
+}
+
 router.get("/storage/objects/*objectPath", async (req, res) => {
   const bucketId = process.env.DEFAULT_OBJECT_STORAGE_BUCKET_ID;
   if (!bucketId) {
@@ -86,7 +96,7 @@ router.get("/image-proxy", async (req, res) => {
   try {
     const targetUrl = new URL(url);
     // 只允许代理1688和alicdn域名的图片
-    if (!targetUrl.hostname.includes("1688.com") && !targetUrl.hostname.includes("alicdn.com")) {
+    if (!["http:", "https:"].includes(targetUrl.protocol) || !isAllowedImageHost(targetUrl.hostname)) {
       res.status(403).json({ error: "Only 1688 images are allowed" });
       return;
     }

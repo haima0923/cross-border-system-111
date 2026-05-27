@@ -41,7 +41,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useAppStore, SkuInput } from '@/context/StoreContext';
 import { useLocation, useSearch } from 'wouter';
-import { Product } from '@workspace/api-client-react/src/generated/api.schemas';
+import { Product } from '@workspace/api-client-react';
 import { Save, Send, AlertCircle, CheckCircle2, Plus, Trash2, ImageIcon, RefreshCw } from 'lucide-react';
 import { TaskContextPanel } from '@/components/shared/TaskContext';
 import { HoverZoomImage } from '@/components/shared/ProductImage';

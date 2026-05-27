@@ -787,7 +787,7 @@ const GROUPS = [
   {
     id: 'active' as const,
     label: '执行中',
-    statuses: ['ordered', 'goods_arrived', 'inspecting', 'goods_inspected', 'exception_reported', 'inspection_anomaly', 'anomaly_handling', 'anomaly_resolved'] as string[],
+    statuses: ['ordered', 'goods_arrived', 'inspecting', 'inspecting_anomaly_entry', 'goods_inspected', 'exception_reported', 'inspection_anomaly', 'anomaly_handling', 'anomaly_resolved'] as string[],
   },
   {
     id: 'done' as const,
@@ -814,7 +814,7 @@ export default function PurchasePool() {
   };
 
   const purchaseProducts = products
-    .filter(p => ['pending_purchase', 'ordered', 'goods_arrived', 'inspecting', 'goods_inspected', 'completed', 'exception_reported', 'terminated', 'inspection_anomaly', 'anomaly_handling', 'anomaly_resolved'].includes(p.status))
+    .filter(p => ['pending_purchase', 'ordered', 'goods_arrived', 'inspecting', 'inspecting_anomaly_entry', 'goods_inspected', 'completed', 'exception_reported', 'terminated', 'inspection_anomaly', 'anomaly_handling', 'anomaly_resolved'].includes(p.status))
     .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
 
   const handleSkuAction = async (
@@ -870,7 +870,7 @@ export default function PurchasePool() {
       <div className="flex gap-3 flex-wrap">
         {[
           { label: '待执行', count: countMap.pending, color: 'text-orange-600 bg-orange-50 border-orange-200', statuses: ['pending_purchase'] },
-          { label: '执行中', count: countMap.active,  color: 'text-blue-600 bg-blue-50 border-blue-200', statuses: ['ordered', 'goods_arrived', 'inspecting', 'goods_inspected', 'exception_reported', 'inspection_anomaly', 'anomaly_handling', 'anomaly_resolved'] },
+          { label: '执行中', count: countMap.active,  color: 'text-blue-600 bg-blue-50 border-blue-200', statuses: ['ordered', 'goods_arrived', 'inspecting', 'inspecting_anomaly_entry', 'goods_inspected', 'exception_reported', 'inspection_anomaly', 'anomaly_handling', 'anomaly_resolved'] },
           { label: '已完成', count: countMap.done,    color: 'text-emerald-600 bg-emerald-50 border-emerald-200', statuses: ['completed', 'terminated'] },
         ].map(s => {
           const unreadCount = purchaseProducts.filter(p => s.statuses.includes(p.status) && isProductUnread(p)).length;

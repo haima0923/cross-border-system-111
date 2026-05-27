@@ -11,6 +11,12 @@ const UPLOAD_ROOT = process.env.UPLOAD_ROOT || path.resolve(process.cwd(), "uplo
 const ANOMALY_DIR = path.join(UPLOAD_ROOT, "anomaly");
 const SKU_DIR = path.join(UPLOAD_ROOT, "sku");
 const TASK_DIR = path.join(UPLOAD_ROOT, "tasks");
+const IMAGE_EXT_BY_MIME: Record<string, string> = {
+  "image/jpeg": ".jpg",
+  "image/png": ".png",
+  "image/gif": ".gif",
+  "image/webp": ".webp",
+};
 if (!fs.existsSync(ANOMALY_DIR)) {
   fs.mkdirSync(ANOMALY_DIR, { recursive: true });
 }
@@ -27,7 +33,7 @@ function makeStorage(dir: string) {
       cb(null, dir);
     },
     filename: (_req, file, cb) => {
-      const ext = path.extname(file.originalname) || ".jpg";
+      const ext = IMAGE_EXT_BY_MIME[file.mimetype] || ".jpg";
       cb(null, randomUUID() + ext);
     },
   });
@@ -38,8 +44,7 @@ function makeUpload(dir: string) {
     storage: makeStorage(dir),
     limits: { fileSize: 5 * 1024 * 1024 },
     fileFilter: (_req, file, cb) => {
-      const allowed = ["image/jpeg", "image/png", "image/gif", "image/webp"];
-      if (allowed.includes(file.mimetype)) {
+      if (IMAGE_EXT_BY_MIME[file.mimetype]) {
         cb(null, true);
       } else {
         cb(new Error("只支持 jpg/png/gif/webp 格式图片"));

@@ -69,5 +69,5 @@ export const sampleSkuLinesTable = pgTable("sample_sku_lines", {
 });
 
 export type InsertSampleSkuLine = Omit<typeof sampleSkuLinesTable.$inferInsert, "id">;
-export const insertSampleSkuLineSchema = z.object({}).passthrough() as z.ZodType<InsertSampleSkuLine>;
+export const insertSampleSkuLineSchema = z.object({}).passthrough() as unknown as z.ZodType<InsertSampleSkuLine>;
 export type SampleSkuLine = typeof sampleSkuLinesTable.$inferSelect;

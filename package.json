@@ -1,0 +1,11 @@
+{
+  "name": "@workspace/xborder-system",
+  "version": "0.0.0",
+  "private": true,
+  "scripts": {
+    "typecheck": "pnpm --dir packages/api-zod run build && pnpm --dir packages/db run build && pnpm --dir api-server run typecheck:local && pnpm --dir xborder-selection run typecheck",
+    "build": "pnpm --dir packages/api-zod run build && pnpm --dir packages/db run build && pnpm --dir api-server run build && pnpm --dir xborder-selection run build",
+    "check": "pnpm run typecheck && pnpm run build",
+    "smoke:api": "node scripts/smoke-api.mjs"
+  }
+}

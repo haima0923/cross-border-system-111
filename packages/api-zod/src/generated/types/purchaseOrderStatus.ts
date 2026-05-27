@@ -12,5 +12,6 @@ export type PurchaseOrderStatus =
 export const PurchaseOrderStatus = {
   pending: "pending",
   ordered: "ordered",
+  arrived: "arrived",
   completed: "completed",
 } as const;

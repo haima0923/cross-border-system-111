@@ -9,6 +9,7 @@ import {
   Clock, Info, RefreshCw, ChevronDown, ChevronUp,
   ArrowRight,
 } from 'lucide-react';
+import { useAppStore } from '@/context/StoreContext';
 
 // ─── Status label map ─────────────────────────────────────────────────────────
 const STATUS_LABEL: Record<string, string> = {
@@ -209,18 +210,24 @@ type OverviewData = {
   };
 };
 
-function OverviewTab() {
+type StatsTabProps = { employeeId?: string };
+
+function statsUrl(path: string, employeeId?: string) {
+  return employeeId ? `/api/stats/${path}?employeeId=${encodeURIComponent(employeeId)}` : `/api/stats/${path}`;
+}
+
+function OverviewTab({ employeeId }: StatsTabProps) {
   const [data, setData] = useState<OverviewData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
   const load = useCallback(() => {
     setLoading(true); setError('');
-    fetch('/api/stats/overview', { credentials: 'include' })
+    fetch(statsUrl('overview', employeeId), { credentials: 'include' })
       .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
       .then(d => { setData(d); setLoading(false); })
       .catch(e => { setError(String(e)); setLoading(false); });
-  }, []);
+  }, [employeeId]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -337,18 +344,18 @@ type ProcessData = {
   overduePurchase: Record<string, string>[];
 };
 
-function ProcessTab() {
+function ProcessTab({ employeeId }: StatsTabProps) {
   const [data, setData] = useState<ProcessData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
   const load = useCallback(() => {
     setLoading(true); setError('');
-    fetch('/api/stats/process', { credentials: 'include' })
+    fetch(statsUrl('process', employeeId), { credentials: 'include' })
       .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
       .then(d => { setData(d); setLoading(false); })
       .catch(e => { setError(String(e)); setLoading(false); });
-  }, []);
+  }, [employeeId]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -524,18 +531,18 @@ function StatBar({ value, max, color }: { value: number; max: number; color: str
   );
 }
 
-function ReviewTab() {
+function ReviewTab({ employeeId }: StatsTabProps) {
   const [data, setData] = useState<ReviewData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
   const load = useCallback(() => {
     setLoading(true); setError('');
-    fetch('/api/stats/review', { credentials: 'include' })
+    fetch(statsUrl('review', employeeId), { credentials: 'include' })
       .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
       .then(d => { setData(d); setLoading(false); })
       .catch(e => { setError(String(e)); setLoading(false); });
-  }, []);
+  }, [employeeId]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -741,6 +748,10 @@ type TabKey = typeof TABS[number]['key'];
 
 export default function DataCenter() {
   const [activeTab, setActiveTab] = useState<TabKey>('overview');
+  const { role, managerEmployeeFilter } = useAppStore();
+  const scopedEmployeeId = role === 'product_manager' && managerEmployeeFilter !== 'all'
+    ? managerEmployeeFilter
+    : undefined;
 
   return (
     <div className="space-y-6">
@@ -777,9 +788,9 @@ export default function DataCenter() {
       </div>
 
       {/* Tab content */}
-      {activeTab === 'overview' && <OverviewTab />}
-      {activeTab === 'process'  && <ProcessTab />}
-      {activeTab === 'review'   && <ReviewTab />}
+      {activeTab === 'overview' && <OverviewTab employeeId={scopedEmployeeId} />}
+      {activeTab === 'process'  && <ProcessTab employeeId={scopedEmployeeId} />}
+      {activeTab === 'review'   && <ReviewTab employeeId={scopedEmployeeId} />}
     </div>
   );
 }

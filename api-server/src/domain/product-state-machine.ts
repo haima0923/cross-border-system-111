@@ -110,10 +110,11 @@ const TRANSITIONS: Record<ProductAction, TransitionRule> = {
   start: { allowedFrom: ["pending_sampling"], to: "pending_sampling" },
   submit_sampling_review: { allowedFrom: ["sampling_collection"], to: "sampling_review_submitted" },
 
-  arrive: { allowedFrom: ["pending_sampling"], to: "sample_arrived" },
-  start_review: { allowedFrom: ["sample_arrived"], to: "sample_reviewing" },
-  cancel_review: { allowedFrom: ["sample_reviewing"], to: "sample_arrived" },
-  submit: { allowedFrom: ["sample_reviewing"], to: "sample_reviewed" },
+  // Legacy single-sample actions are folded into the current multi-option sampling flow.
+  arrive: { allowedFrom: ["pending_sampling", "sampling_collection"], to: "sampling_collection" },
+  start_review: { allowedFrom: ["sampling_collection"], to: "sampling_collection" },
+  cancel_review: { allowedFrom: ["sampling_collection"], to: "sampling_collection" },
+  submit: { allowedFrom: ["sampling_collection"], to: "sampling_review_submitted" },
 
   approve_purchase: { allowedFrom: ["sample_reviewed"], to: "pending_purchase" },
   change_supplier: { allowedFrom: ["sample_reviewed"], to: "supplier_change_requested" },

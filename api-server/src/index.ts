@@ -19,12 +19,16 @@ if (Number.isNaN(port) || port <= 0) {
   throw new Error(`Invalid PORT value: "${rawPort}"`);
 }
 
+if (!process.env["JWT_SECRET"]) {
+  throw new Error("JWT_SECRET environment variable is required but was not provided.");
+}
+
 const SYSTEM_USERS = [
   { employeeId: "1", name: "张小凡", role: "product_specialist" },
   { employeeId: "2", name: "赵总监", role: "product_manager" },
   { employeeId: "admin", name: "管理员", role: "admin" },
 ];
-const SYSTEM_PASSWORD = "xborder2024";
+const SYSTEM_PASSWORD = process.env["SYSTEM_USER_PASSWORD"] || "xborder2024";
 
 async function ensureSystemUsers(): Promise<void> {
   const hash = await bcrypt.hash(SYSTEM_PASSWORD, 10);

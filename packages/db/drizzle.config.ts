@@ -11,7 +11,10 @@ export default defineConfig({
     "./src/schema/purchase_orders.ts",
     "./src/schema/sample_options.ts",
     "./src/schema/sample_sku_lines.ts",
-    "./src/schema/users.ts"
+    "./src/schema/users.ts",
+    "./src/schema/procurement_tasks.ts",
+    "./src/schema/procurement_task_assignees.ts",
+    "./src/schema/spu_code_counters.ts"
   ],
   dialect: "postgresql",
   dbCredentials: {

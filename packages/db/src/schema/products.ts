@@ -103,5 +103,5 @@ export const productsTable = pgTable("products", {
 });
 
 export type InsertProduct = Omit<typeof productsTable.$inferInsert, "id">;
-export const insertProductSchema = z.object({}).passthrough() as z.ZodType<InsertProduct>;
+export const insertProductSchema = z.object({}).passthrough() as unknown as z.ZodType<InsertProduct>;
 export type Product = typeof productsTable.$inferSelect;

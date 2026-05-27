@@ -19,19 +19,27 @@ const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
 });
 
-export const db = drizzle(pool, {
-  schema: {
-    ...products,
-    ...purchaseOrders,
-    ...sampleOptions,
-    ...sampleSkuLines,
-    ...purchaseOrderLines,
-    ...users,
-    ...procurementTasks,
-    ...procurementTaskAssignees,
-    ...spuCodeCounters,
-  },
-});
+const schema = {
+  productsTable: products.productsTable,
+  purchaseOrdersTable: purchaseOrders.purchaseOrdersTable,
+  sampleOptionsTable: sampleOptions.sampleOptionsTable,
+  sampleSkuLinesTable: sampleSkuLines.sampleSkuLinesTable,
+  purchaseOrderLinesTable: purchaseOrderLines.purchaseOrderLinesTable,
+  usersTable: users.usersTable,
+  procurementTasksTable: procurementTasks.procurementTasksTable,
+  procurementTaskAssigneesTable: procurementTaskAssignees.procurementTaskAssigneesTable,
+  spuCodeCountersTable: spuCodeCounters.spuCodeCountersTable,
+};
+
+const typedDb = drizzle(pool, { schema });
+
+// Legacy routes still build dynamic write payloads from forms and workflow actions.
+// Keep reads typed while isolating the temporary write looseness to mutating methods.
+export const db = typedDb as Omit<typeof typedDb, "delete" | "insert" | "update"> & {
+  delete: any;
+  insert: any;
+  update: any;
+};
 
 export { pool };
 

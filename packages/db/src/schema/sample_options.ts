@@ -27,6 +27,7 @@ export const sampleOptionsTable = pgTable("sample_options", {
   sampleOrderStatus: text("sample_order_status").notNull().default("pending"),
   sampleOrderedAt: timestamp("sample_ordered_at"),
   sampleArrivedAt: timestamp("sample_arrived_at"),
+  sampleReviewStartedAt: timestamp("sample_review_started_at"),
   selectionNote: text("selection_note"),
   selectedBy: text("selected_by"),
   selectedAt: timestamp("selected_at"),
@@ -36,5 +37,5 @@ export const sampleOptionsTable = pgTable("sample_options", {
 });
 
 export type InsertSampleOption = Omit<typeof sampleOptionsTable.$inferInsert, "id">;
-export const insertSampleOptionSchema = z.object({}).passthrough() as z.ZodType<InsertSampleOption>;
+export const insertSampleOptionSchema = z.object({}).passthrough() as unknown as z.ZodType<InsertSampleOption>;
 export type SampleOption = typeof sampleOptionsTable.$inferSelect;

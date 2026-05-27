@@ -283,7 +283,8 @@ export const UpdateProductBody = zod.object({
   suggestedPrice: zod.number().nullish(),
   remarks: zod.string().nullish(),
   logisticsMode: zod.string().nullish(),
-  action: zod.enum(["draft", "pending_info", "submit_analysis", "save_draft", "resubmit_screening"]).optional(),
+  action: zod.enum(["draft", "pending_info", "submit_analysis", "save_draft", "resubmit_screening", "return", "reject"]).optional(),
+  comment: zod.string().optional(),
 });
 
 export const UpdateProductResponse = zod.object({
@@ -706,7 +707,7 @@ export const ListPurchaseOrdersResponseItem = zod.object({
   purchasePrice: zod.number(),
   quantity: zod.number(),
   totalAmount: zod.number(),
-  status: zod.enum(["pending", "ordered", "completed"]),
+  status: zod.enum(["pending", "ordered", "arrived", "completed"]),
   createdAt: zod.string(),
   updatedAt: zod.string().optional(),
 });
@@ -734,7 +735,7 @@ export const UpdatePurchaseOrderParams = zod.object({
 });
 
 export const UpdatePurchaseOrderBody = zod.object({
-  status: zod.enum(["pending", "ordered", "completed"]),
+  status: zod.enum(["pending", "ordered", "arrived", "completed"]),
 });
 
 export const UpdatePurchaseOrderResponse = zod.object({
@@ -745,7 +746,7 @@ export const UpdatePurchaseOrderResponse = zod.object({
   purchasePrice: zod.number(),
   quantity: zod.number(),
   totalAmount: zod.number(),
-  status: zod.enum(["pending", "ordered", "completed"]),
+  status: zod.enum(["pending", "ordered", "arrived", "completed"]),
   createdAt: zod.string(),
   updatedAt: zod.string().optional(),
 });

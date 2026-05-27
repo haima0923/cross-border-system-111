@@ -1,4 +1,4 @@
-import { Router, type IRouter } from "express";
+import { Router, type IRouter, type Request, type Response } from "express";
 import { authenticate } from "../middleware/authenticate";
 import { db } from "@workspace/db";
 import {
@@ -21,6 +21,40 @@ import { fetchAndStoreImage, fetchAndStoreImages } from "../lib/fetchAndStoreIma
 import { assertTransitOrThrow, type ProductAction, type ProductFromStatus } from "../domain/product-state-machine";
 
 const router: IRouter = Router();
+
+type ProductRow = typeof productsTable.$inferSelect;
+
+function canSeeAllProducts(req: Request) {
+  return req.user?.role === "product_manager" || req.user?.role === "admin";
+}
+
+function canAccessProduct(req: Request, product: Pick<ProductRow, "employeeId">) {
+  if (canSeeAllProducts(req)) return true;
+  return req.user?.role === "product_specialist" && product.employeeId === req.user.employeeId;
+}
+
+function sendProductAccessDenied(res: Response) {
+  res.status(403).json({ error: "No permission to access this employee's product" });
+}
+
+async function loadProductForAccess(req: Request, res: Response, productId: string) {
+  const [product] = await db
+    .select()
+    .from(productsTable)
+    .where(eq(productsTable.id, productId));
+
+  if (!product) {
+    res.status(404).json({ error: "Product not found" });
+    return null;
+  }
+
+  if (!canAccessProduct(req, product)) {
+    sendProductAccessDenied(res);
+    return null;
+  }
+
+  return product;
+}
 
 /** SKU 采购状态分层：用于多 SKU 时推导产品主状态 */
 const SKU_PASSED = new Set(["passed", "completed"]);
@@ -58,6 +92,64 @@ async function getManagerSelectedSkus(productId: string) {
     .from(sampleSkuLinesTable)
     .where(inArray(sampleSkuLinesTable.sampleOptionId, selectedOptionIds));
   return rows.filter((s) => s.managerSelected);
+}
+
+function isSampleSkuEvaluationComplete(sku: {
+  anomalyType?: unknown;
+  skuConsistentWithImage?: unknown;
+  skuMaterialEval?: unknown;
+  skuWorkmanshipEval?: unknown;
+  skuFunctionEval?: unknown;
+}) {
+  if (sku.anomalyType) return true;
+  return (
+    sku.skuConsistentWithImage != null &&
+    !!sku.skuMaterialEval &&
+    !!sku.skuWorkmanshipEval &&
+    !!sku.skuFunctionEval
+  );
+}
+
+async function validateSamplingReviewReady(productId: string): Promise<string | null> {
+  const options = await db
+    .select({
+      id: sampleOptionsTable.id,
+      sampleOrderStatus: sampleOptionsTable.sampleOrderStatus,
+    })
+    .from(sampleOptionsTable)
+    .where(eq(sampleOptionsTable.productId, productId));
+
+  if (options.length < 3) {
+    return "Please add at least 3 sample options before submitting review";
+  }
+
+  const unevaluated = options.filter((option) => (option.sampleOrderStatus || "pending") !== "evaluated");
+  if (unevaluated.length > 0) {
+    return "All sample options must be evaluated before submitting review";
+  }
+
+  const optionIds = options.map((option) => option.id);
+  if (optionIds.length === 0) return null;
+
+  const skuRows = await db
+    .select({
+      id: sampleSkuLinesTable.id,
+      sampleOptionId: sampleSkuLinesTable.sampleOptionId,
+      anomalyType: sampleSkuLinesTable.anomalyType,
+      skuConsistentWithImage: sampleSkuLinesTable.skuConsistentWithImage,
+      skuMaterialEval: sampleSkuLinesTable.skuMaterialEval,
+      skuWorkmanshipEval: sampleSkuLinesTable.skuWorkmanshipEval,
+      skuFunctionEval: sampleSkuLinesTable.skuFunctionEval,
+    })
+    .from(sampleSkuLinesTable)
+    .where(inArray(sampleSkuLinesTable.sampleOptionId, optionIds));
+
+  const incompleteSku = skuRows.find((sku) => !isSampleSkuEvaluationComplete(sku));
+  if (incompleteSku) {
+    return "All non-anomaly SKUs must have complete evaluation before submitting review";
+  }
+
+  return null;
 }
 
 async function validateProductTaskAssignment(taskId: string | null | undefined, employeeId: string | null | undefined) {
@@ -606,13 +698,12 @@ router.get("/products", authenticate, async (req, res) => {
     );
   }
   // 数据权限过滤：product_specialist只能看到自己的产品
-  const userRole = req.user?.role;
-  const userEmployeeId = req.user?.employeeId;
-  if (userRole === "product_specialist" && userEmployeeId) {
-    filtered = filtered.filter((r) => {
-      const row = r as Record<string, unknown>;
-      return row.employeeId === userEmployeeId;
-    });
+  const employeeIdFilter = typeof req.query.employeeId === "string" ? req.query.employeeId.trim() : "";
+  if (employeeIdFilter && canSeeAllProducts(req)) {
+    filtered = filtered.filter((r) => r.employeeId === employeeIdFilter);
+  }
+  if (req.user?.role === "product_specialist") {
+    filtered = filtered.filter((r) => r.employeeId === req.user?.employeeId);
   }
   res.json(filtered.map((r) => serializeProduct(r as Record<string, unknown>)));
 });
@@ -623,10 +714,14 @@ router.post("/products", async (req, res) => {
     res.status(400).json({ error: body.error.message });
     return;
   }
+  const data = { ...body.data };
+  if (req.user?.role === "product_specialist") {
+    data.submitterName = req.user.name;
+    data.employeeId = req.user.employeeId;
+  }
 
   const now = new Date();
   const id = randomUUID();
-  const data = body.data;
 
   const taskError = await validateProductTaskAssignment(data.taskId, data.employeeId);
   if (taskError) {
@@ -711,7 +806,7 @@ router.post("/products", async (req, res) => {
   // Auto-create initial SampleOption + SampleSkuLine(s) for every new product
   // Wrapped in try/catch so a sample-data failure never rolls back the product itself
   try {
-    const rawSkus: Array<{ skuName?: string; unitPrice?: number; moq?: number; notes?: string; imageUrl?: string }> =
+    const rawSkus: Array<{ skuName?: string; unitPrice?: number; moq?: number; notes?: string; imageUrl?: string | null }> =
       Array.isArray(req.body.skus) && req.body.skus.length > 0 ? req.body.skus : [];
 
     const soId = randomUUID();
@@ -731,9 +826,9 @@ router.post("/products", async (req, res) => {
       updatedAt: now,
     });
 
-    const skusToCreate = rawSkus.length > 0
+    const skusToCreate: Array<{ skuName?: string; unitPrice?: number; moq?: number; notes?: string; imageUrl?: string | null }> = rawSkus.length > 0
       ? rawSkus
-      : [{ skuName: "默认款", unitPrice: data.purchasePrice, moq: data.moq, notes: "" }];
+      : [{ skuName: "默认款", unitPrice: data.purchasePrice, moq: data.moq, notes: "", imageUrl: null }];
 
     const createdSkuIds: Array<{ id: string; imageUrl: string | null }> = [];
     for (const sku of skusToCreate) {
@@ -798,38 +893,47 @@ router.post("/products", async (req, res) => {
 });
 
 router.get("/products/:id", async (req, res) => {
-  const [product] = await db
-    .select()
-    .from(productsTable)
-    .where(eq(productsTable.id, req.params.id));
+  const productId = String(req.params.id);
+  const product = await loadProductForAccess(req, res, productId);
   if (!product) {
-    res.status(404).json({ error: "Product not found" });
     return;
   }
   res.json(serializeProduct(product as Record<string, unknown>));
 });
 
 router.put("/products/:id", async (req, res) => {
+  const productId = String(req.params.id);
   const body = UpdateProductBody.safeParse(req.body);
   if (!body.success) {
     res.status(400).json({ error: body.error.message });
     return;
   }
-  if ((body.data.action === "return" || body.data.action === "reject") && !body.data.comment?.trim()) {
-    res.status(400).json({ error: body.data.action === "return" ? "请填写退回补充原因" : "请填写拒绝原因" });
+  const data = body.data as typeof body.data & { action?: string; comment?: string };
+  if ((data.action === "return" || data.action === "reject") && !data.comment?.trim()) {
+    res.status(400).json({ error: data.action === "return" ? "请填写退回补充原因" : "请填写拒绝原因" });
     return;
   }
 
-  const [existing] = await db
-    .select()
-    .from(productsTable)
-    .where(eq(productsTable.id, req.params.id));
+  const existing = await loadProductForAccess(req, res, productId);
   if (!existing) {
-    res.status(404).json({ error: "Product not found" });
     return;
   }
+  if (req.user?.role === "product_specialist") {
+    data.submitterName = existing.submitterName;
+    data.employeeId = existing.employeeId;
+  }
 
-  const data = body.data;
+  if (data.taskId !== undefined || data.employeeId !== undefined) {
+    const taskError = await validateProductTaskAssignment(
+      data.taskId ?? existing.taskId,
+      data.employeeId ?? existing.employeeId,
+    );
+    if (taskError) {
+      res.status(400).json({ error: taskError });
+      return;
+    }
+  }
+
   const now = new Date();
   const merged = { ...existing, ...data };
   const costs = calcCosts(merged as Record<string, unknown>);
@@ -934,7 +1038,7 @@ router.put("/products/:id", async (req, res) => {
       analysisSubmittedAt: data.action === "submit_analysis" ? now : existing.analysisSubmittedAt,
       historyLog,
     })
-    .where(eq(productsTable.id, req.params.id));
+    .where(eq(productsTable.id, productId));
 
   // 主图变更时重新抓取（imageUrl 有变化才触发）
   if (data.imageUrl && data.imageUrl !== existing.imageUrl) {
@@ -946,7 +1050,7 @@ router.put("/products/:id", async (req, res) => {
       if (hostedUrl) {
         await db.update(productsTable)
           .set({ hostedImageUrl: hostedUrl })
-          .where(eq(productsTable.id, req.params.id));
+          .where(eq(productsTable.id, productId));
       }
     } catch {
       // 静默跳过
@@ -956,18 +1060,14 @@ router.put("/products/:id", async (req, res) => {
   const [product] = await db
     .select()
     .from(productsTable)
-    .where(eq(productsTable.id, req.params.id));
+    .where(eq(productsTable.id, productId));
   res.json(serializeProduct(product as Record<string, unknown>));
 });
 
 // Safe alias (avoids ad-blocker keyword "analyze"); old path kept for backward compat
 async function handleRunAnalysis(req: import("express").Request, res: import("express").Response) {
-  const [existing] = await db
-    .select()
-    .from(productsTable)
-    .where(eq(productsTable.id, req.params.id));
+  const existing = await loadProductForAccess(req, res, String(req.params.id));
   if (!existing) {
-    res.status(404).json({ error: "Product not found" });
     return;
   }
 
@@ -1002,12 +1102,12 @@ async function handleRunAnalysis(req: import("express").Request, res: import("ex
       analysisSubmittedAt: now,
       historyLog,
     })
-    .where(eq(productsTable.id, req.params.id));
+    .where(eq(productsTable.id, String(req.params.id)));
 
   const [product] = await db
     .select()
     .from(productsTable)
-    .where(eq(productsTable.id, req.params.id));
+    .where(eq(productsTable.id, String(req.params.id)));
   res.json(serializeProduct(product as Record<string, unknown>));
 }
 
@@ -1021,16 +1121,13 @@ router.post("/products/:id/submit-screening", async (req, res) => {
     return;
   }
 
-  const [existing] = await db
-    .select()
-    .from(productsTable)
-    .where(eq(productsTable.id, req.params.id));
+  const existing = await loadProductForAccess(req, res, String(req.params.id));
   if (!existing) {
-    res.status(404).json({ error: "Product not found" });
     return;
   }
 
   const now = new Date();
+  const submitterName = req.user?.role === "product_specialist" ? req.user.name : body.data.submitterName;
   let nextStatus: string;
   try {
     const action = (existing.status === "completed" || existing.status === "rejected" || existing.status === "returned") ? "resubmit_screening" : "submit_screening";
@@ -1041,7 +1138,7 @@ router.post("/products/:id/submit-screening", async (req, res) => {
   }
   const historyLog = addHistory(
     (existing.historyLog as unknown[]) || [],
-    body.data.submitterName,
+    submitterName,
     "提交初筛",
     existing.status,
     nextStatus,
@@ -1056,18 +1153,18 @@ router.post("/products/:id/submit-screening", async (req, res) => {
     .set({
       status: nextStatus,
       employeeNote: body.data.employeeNote,
-      screeningSubmittedBy: body.data.submitterName,
+      screeningSubmittedBy: submitterName,
       screeningSubmittedAt: now,
       resubmitted: resubmittedFlag ? true : existing.resubmitted,
       updatedAt: now,
       historyLog,
     })
-    .where(eq(productsTable.id, req.params.id));
+    .where(eq(productsTable.id, String(req.params.id)));
 
   const [product] = await db
     .select()
     .from(productsTable)
-    .where(eq(productsTable.id, req.params.id));
+    .where(eq(productsTable.id, String(req.params.id)));
   res.json(serializeProduct(product as Record<string, unknown>));
 });
 
@@ -1090,9 +1187,13 @@ router.post("/products/:id/manager-action", async (req, res) => {
   const [existing] = await db
     .select()
     .from(productsTable)
-    .where(eq(productsTable.id, req.params.id));
+    .where(eq(productsTable.id, String(req.params.id)));
   if (!existing) {
     res.status(404).json({ error: "Product not found" });
+    return;
+  }
+  if (!canAccessProduct(req, existing)) {
+    sendProductAccessDenied(res);
     return;
   }
 
@@ -1146,12 +1247,12 @@ router.post("/products/:id/manager-action", async (req, res) => {
   await db
     .update(productsTable)
     .set(managerUpdates)
-    .where(eq(productsTable.id, req.params.id));
+    .where(eq(productsTable.id, String(req.params.id)));
 
   const [product] = await db
     .select()
     .from(productsTable)
-    .where(eq(productsTable.id, req.params.id));
+    .where(eq(productsTable.id, String(req.params.id)));
   res.json(serializeProduct(product as Record<string, unknown>));
 });
 
@@ -1421,9 +1522,13 @@ router.post("/products/:id/sample-action", async (req, res) => {
   const [existing] = await db
     .select()
     .from(productsTable)
-    .where(eq(productsTable.id, req.params.id));
+    .where(eq(productsTable.id, String(req.params.id)));
   if (!existing) {
     res.status(404).json({ error: "Product not found" });
+    return;
+  }
+  if (!canAccessProduct(req, existing)) {
+    sendProductAccessDenied(res);
     return;
   }
 
@@ -1467,9 +1572,9 @@ router.post("/products/:id/sample-action", async (req, res) => {
       // sampling_collection → sampling_review_submitted: 员工提交所有方案验样评价
       transitionAction = "submit_sampling_review";
       // 校验方案数量至少3个
-      const optionCount = (await db.select().from(sampleOptionsTable).where(eq(sampleOptionsTable.productId, req.params.id))).length;
-      if (optionCount < 3) {
-        res.status(400).json({ error: "请至少添加3个采样方案后再提交" });
+      const readinessError = await validateSamplingReviewReady(existing.id);
+      if (readinessError) {
+        res.status(400).json({ error: readinessError });
         return;
       }
       actionLabel = "提交验样结果";
@@ -1847,12 +1952,12 @@ router.post("/products/:id/sample-action", async (req, res) => {
   await db
     .update(productsTable)
     .set({ status: newStatus, ...updates, updatedAt: now, historyLog })
-    .where(eq(productsTable.id, req.params.id));
+    .where(eq(productsTable.id, String(req.params.id)));
 
   const [product] = await db
     .select()
     .from(productsTable)
-    .where(eq(productsTable.id, req.params.id));
+    .where(eq(productsTable.id, String(req.params.id)));
   if (updatedSkuLineId) {
     const [updatedSku] = await db
       .select()
@@ -1946,13 +2051,29 @@ router.post("/products/:id/manager-decision", async (req, res) => {
   const parsedSkuQty: Record<string, number> =
     skuQuantities && typeof skuQuantities === "object" ? skuQuantities : {};
 
-  const allProductOptions = await db.select({ id: sampleOptionsTable.id })
+  const allProductOptions = await db.select({
+      id: sampleOptionsTable.id,
+      sampleOrderStatus: sampleOptionsTable.sampleOrderStatus,
+    })
     .from(sampleOptionsTable)
     .where(eq(sampleOptionsTable.productId, id));
   const allOptionIds = allProductOptions.map(o => o.id);
   const selectedSkuIdList = selectedSkuIds as string[];
   const selectedSkuIdSet = new Set(selectedSkuIdList);
   const selectedOptionIdSet = new Set(selectedOptionIdsList);
+  if (selectedOptionIdsList.some((optionId) => !allOptionIds.includes(optionId))) {
+    res.status(400).json({ error: "Selected sample option does not belong to this product" });
+    return;
+  }
+  if (product.status !== "pending_purchase") {
+    const unevaluatedSelectedOptions = allProductOptions.filter(
+      (option) => selectedOptionIdSet.has(option.id) && (option.sampleOrderStatus || "pending") !== "evaluated",
+    );
+    if (unevaluatedSelectedOptions.length > 0) {
+      res.status(400).json({ error: "Selected sample options must be evaluated before purchase approval" });
+      return;
+    }
+  }
   const allSkuRowsForProduct = allOptionIds.length > 0
     ? await db.select({
         id: sampleSkuLinesTable.id,
@@ -1969,6 +2090,11 @@ router.post("/products/:id/manager-decision", async (req, res) => {
 
   if (selectedSkuRowsForProduct.length !== selectedSkuIdSet.size) {
     res.status(400).json({ error: "选中的 SKU 不属于该产品" });
+    return;
+  }
+  const selectedOptionIdsWithSku = new Set(selectedSkuRowsForProduct.map((s) => s.sampleOptionId));
+  if (selectedOptionIdsList.some((optionId) => !selectedOptionIdsWithSku.has(optionId))) {
+    res.status(400).json({ error: "Each selected sample option must include at least one selected SKU" });
     return;
   }
   if (selectedSkuRowsForProduct.some((s) => !selectedOptionIdSet.has(s.sampleOptionId))) {
@@ -2018,7 +2144,7 @@ router.post("/products/:id/manager-decision", async (req, res) => {
     approveNote,
   );
 
-  await db.transaction(async (tx) => {
+  await db.transaction(async (tx: any) => {
     const lockedResult = await tx.execute(sql`
       select status, spu_code, spu_code_period, spu_code_sequence, spu_code_assigned_at, entered_purchase_at
       from products

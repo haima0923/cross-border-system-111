@@ -16,10 +16,26 @@ import {
 } from 'lucide-react';
 import { cn } from '@/components/shared/StatusBadge';
 import { countUnreadProducts, type UnreadScope } from '@/lib/unreadEvents';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
 
 export function AppLayout({ children }: { children: React.ReactNode }) {
   const [location] = useLocation();
-  const { role, currentUser, logout, products, procurementTasks } = useAppStore();
+  const {
+    role,
+    currentUser,
+    logout,
+    products,
+    procurementTasks,
+    managerEmployees,
+    managerEmployeeFilter,
+    setManagerEmployeeFilter,
+  } = useAppStore();
   const [unreadVersion, setUnreadVersion] = useState(0);
 
   React.useEffect(() => {
@@ -97,6 +113,27 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
               </Link>
             )
           })}
+          {role === 'product_manager' && (
+            <div className="pt-5 mt-5 border-t border-border/70 px-2 space-y-2">
+              <div className="flex items-center gap-2 text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+                <Users size={14} className="text-slate-400" />
+                <span>员工视图</span>
+              </div>
+              <Select value={managerEmployeeFilter} onValueChange={setManagerEmployeeFilter}>
+                <SelectTrigger className="h-9 bg-background text-sm">
+                  <SelectValue placeholder="全部员工" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">全部员工</SelectItem>
+                  {managerEmployees.map(employee => (
+                    <SelectItem key={employee.employeeId} value={employee.employeeId}>
+                      {employee.name} ({employee.employeeId})
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          )}
         </div>
 
         <div className="p-4 border-t border-border">

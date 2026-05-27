@@ -71,8 +71,8 @@ export default function ManagerPool() {
 
   if (role !== 'product_manager') return null;
 
-  const byUpdatedDesc = (a: { updatedAt: string }, b: { updatedAt: string }) =>
-    new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime();
+  const byUpdatedDesc = (a: { updatedAt?: string | null }, b: { updatedAt?: string | null }) =>
+    new Date(b.updatedAt || 0).getTime() - new Date(a.updatedAt || 0).getTime();
 
   // Section 1: initial screening review — sorted by updatedAt desc
   const poolProducts = products.filter(p =>

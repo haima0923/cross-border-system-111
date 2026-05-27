@@ -174,7 +174,7 @@ function DecisionCard({ product }: { product: ReturnType<typeof useAppStore>['pr
 // ── Main Page ─────────────────────────────────────────────────────────────────
 
 export default function AnalysisResult() {
-  const params = useParams();
+  const params = useParams<{ id: string }>();
   const id = params.id as string;
   const { products, updateProduct, currentUser, role, loading, sampleOptions, sampleSkuLines } = useAppStore();
   const [, setLocation] = useLocation();
@@ -276,9 +276,13 @@ export default function AnalysisResult() {
     setLocation('/workbench');
   };
 
-  const handleReturn = () => {
-    updateProduct(id, { status: 'returned' }, '退回补充', '员工觉得AI测算不理想或需要更多信息');
-    setLocation('/workbench');
+  const handleReturn = async () => {
+    try {
+      await updateProduct(id, { status: 'save_draft' } as any, '退回补充', '员工退回补充信息');
+      setLocation(`/entry?id=${id}`);
+    } catch (err) {
+      alert('退回补充失败，请重试');
+    }
   };
 
   // 保存草稿（不改变状态）

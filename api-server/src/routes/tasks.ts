@@ -89,8 +89,9 @@ router.get("/tasks", async (req, res) => {
       db.select().from(procurementTasksTable).orderBy(desc(procurementTasksTable.createdAt)),
       db.select().from(procurementTaskAssigneesTable).where(eq(procurementTaskAssigneesTable.employeeId, employeeId)),
     ]);
-    const assigneeByTask = new Map(assignees.map(item => [item.taskId, item]));
-    const explicitTaskIds = new Set(assignees.map(item => item.taskId));
+    const typedAssignees = assignees as Array<{ taskId: string; readAt?: Date | string | null }>;
+    const assigneeByTask = new Map(typedAssignees.map(item => [item.taskId, item]));
+    const explicitTaskIds = new Set(typedAssignees.map(item => item.taskId));
 
     const visibleTasks = tasks.filter(task =>
       task.status !== "draft" &&

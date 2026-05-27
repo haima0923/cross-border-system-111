@@ -5,9 +5,10 @@
   "type": "module",
   "scripts": {
     "dev": "cross-env NODE_ENV=development pnpm run build && pnpm run start",
-    "build": "node ./build.mjs",
+    "build": "pnpm run typecheck && node ./build.mjs",
     "start": "node --env-file=../.env --enable-source-maps ./dist/index.mjs",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "typecheck": "pnpm --dir ../packages/api-zod run build && pnpm --dir ../packages/db run build && pnpm run typecheck:local",
+    "typecheck:local": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
     "@google-cloud/storage": "^7.19.0",

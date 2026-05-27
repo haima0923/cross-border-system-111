@@ -12,5 +12,6 @@ export type UpdatePurchaseOrderBodyStatus =
 export const UpdatePurchaseOrderBodyStatus = {
   pending: "pending",
   ordered: "ordered",
+  arrived: "arrived",
   completed: "completed",
 } as const;

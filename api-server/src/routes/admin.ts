@@ -100,7 +100,7 @@ router.post("/admin/users", authenticate, requireAdmin, async (req, res) => {
 
 // PATCH /admin/users/:id/status — enable or disable
 router.patch("/admin/users/:id/status", authenticate, requireAdmin, async (req, res) => {
-  const { id } = req.params;
+  const id = String(req.params.id);
   const { status } = req.body as { status?: string };
 
   if (status !== "active" && status !== "disabled") {
@@ -140,7 +140,7 @@ router.patch("/admin/self", authenticate, requireAdmin, async (req, res) => {
     return;
   }
 
-  const updates: Partial<typeof usersTable.$inferInsert> = {
+  const updates: Record<string, unknown> = {
     updatedAt: new Date(),
   };
 

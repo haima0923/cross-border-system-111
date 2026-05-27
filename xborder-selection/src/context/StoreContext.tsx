@@ -1,5 +1,5 @@
-import React, { createContext, useContext, useState, useEffect, ReactNode, useCallback, useRef } from 'react';
-import { Product, PurchaseOrder } from '@workspace/api-client-react/src/generated/api.schemas';
+import React, { createContext, useContext, useState, useEffect, ReactNode, useCallback, useRef, useMemo } from 'react';
+import { Product, PurchaseOrder } from '@workspace/api-client-react';
 
 const API = '/api';
 
@@ -146,6 +146,12 @@ export interface ProcurementTask {
   }>;
 }
 
+export interface ManagerEmployee {
+  employeeId: string;
+  name: string;
+  status?: string | null;
+}
+
 // 操作日志类型
 export interface HistoryLogEntry {
   action: string;
@@ -160,6 +166,9 @@ interface StoreState {
   role: UserRole;
   currentUser: { name: string; id: string; department: string };
   products: ProductWithCodes[];
+  managerEmployees: ManagerEmployee[];
+  managerEmployeeFilter: string;
+  setManagerEmployeeFilter: (employeeId: string) => void;
   purchaseOrders: PurchaseOrder[];
   sampleOptions: SampleOption[];
   sampleSkuLines: SampleSkuLine[];
@@ -198,7 +207,10 @@ interface StoreState {
     skuQuantities?: Record<string, number>;
     comment?: string;
   }) => Promise<void>;
-  reportSamplingAnomaly: (skuLineId: string, data: { anomalyType: string; anomalyNote: string }) => Promise<void>;
+  reportSamplingAnomaly: (
+    skuLineId: string,
+    data: { anomalyType: string; anomalyNote: string; anomalyImages?: string[] },
+  ) => Promise<void>;
   approveSamplingAnomaly: (skuLineId: string, data: { approved: boolean; note?: string }) => Promise<void>;
   createProcurementTask: (task: Partial<ProcurementTask> & { assigneeEmployeeIds?: string[] }) => Promise<ProcurementTask>;
   updateProcurementTask: (id: string, updates: Partial<ProcurementTask>) => Promise<ProcurementTask>;
@@ -267,12 +279,33 @@ export function StoreProvider({
   };
 
   const [products, setProducts] = useState<ProductWithCodes[]>([]);
+  const [managerEmployees, setManagerEmployees] = useState<ManagerEmployee[]>([]);
+  const [managerEmployeeFilter, setManagerEmployeeFilter] = useState('all');
   const [purchaseOrders, setPurchaseOrders] = useState<PurchaseOrder[]>([]);
   const [sampleOptions, setSampleOptions] = useState<SampleOption[]>([]);
   const [sampleSkuLines, setSampleSkuLines] = useState<SampleSkuLine[]>([]);
   const [procurementTasks, setProcurementTasks] = useState<ProcurementTask[]>([]);
   const [loading, setLoading] = useState(true);
   const pendingSkuActionsRef = useRef<Set<string>>(new Set());
+
+  const visibleProducts = useMemo(() => {
+    if (role !== 'product_manager' || managerEmployeeFilter === 'all') return products;
+    return products.filter(product => product.employeeId === managerEmployeeFilter);
+  }, [products, role, managerEmployeeFilter]);
+
+  const visibleProcurementTasks = useMemo(() => {
+    if (role !== 'product_manager' || managerEmployeeFilter === 'all') return procurementTasks;
+    const taskIdsWithProducts = new Set(
+      products
+        .filter(product => product.employeeId === managerEmployeeFilter && product.taskId)
+        .map(product => product.taskId as string),
+    );
+    return procurementTasks.filter(task =>
+      task.assigneeMode === 'all' ||
+      task.assignees?.some(assignee => assignee.employeeId === managerEmployeeFilter) ||
+      taskIdsWithProducts.has(task.id),
+    );
+  }, [managerEmployeeFilter, procurementTasks, products, role]);
 
   // 员工提交采样异常
   // 报告采样异常 - 优化：局部更新而非全量refetch
@@ -309,8 +342,19 @@ export function StoreProvider({
       console.error('refetch (products) failed:', err);
     }
     try {
-      const tasks = await apiFetch(API + '/tasks');
+      const [tasks, specialists] = role === 'product_manager'
+        ? await Promise.all([
+            apiFetch(API + '/tasks'),
+            apiFetch(API + '/tasks/specialists'),
+          ])
+        : [await apiFetch(API + '/tasks'), []];
       setProcurementTasks(tasks);
+      if (role === 'product_manager') {
+        setManagerEmployees(specialists);
+      } else {
+        setManagerEmployees([]);
+        setManagerEmployeeFilter('all');
+      }
     } catch (err) {
       console.error('refetch (procurement tasks) failed:', err);
     }
@@ -329,12 +373,22 @@ export function StoreProvider({
     } catch (err) {
       console.error('refetch (sample data) failed:', err);
     }
-  }, []);
+  }, [role]);
 
   useEffect(() => {
     setLoading(true);
     refetch().finally(() => setLoading(false));
   }, [refetch]);
+
+  useEffect(() => {
+    if (
+      role === 'product_manager' &&
+      managerEmployeeFilter !== 'all' &&
+      !managerEmployees.some(employee => employee.employeeId === managerEmployeeFilter)
+    ) {
+      setManagerEmployeeFilter('all');
+    }
+  }, [managerEmployees, managerEmployeeFilter, role]);
 
   // 30秒自动轮询（仅在非loading时触发，避免刷新冲突）
   useEffect(() => {
@@ -432,13 +486,7 @@ export function StoreProvider({
         comment: (updates as any).managerComment || note || '',
       };
     } else if (status === 'pending_purchase') {
-      url = API + '/products/' + id + '/manager-action';
-      method = 'POST';
-      body = {
-        action: 'approve',
-        managerName: currentUser.name,
-        comment: (updates as any).managerComment || note || '',
-      };
+      return Promise.reject(new Error('pending_purchase must be set through managerDecision'));
     } else if (status === 'rejected') {
       url = API + '/products/' + id + '/manager-action';
       method = 'POST';
@@ -448,13 +496,7 @@ export function StoreProvider({
         comment: (updates as any).managerComment || note || '',
       };
     } else if (status === 'supplier_change_requested') {
-      url = API + '/products/' + id + '/manager-action';
-      method = 'POST';
-      body = {
-        action: 'request_supplier_change',
-        managerName: currentUser.name,
-        comment: (updates as any).managerComment || note || '',
-      };
+      return Promise.reject(new Error('supplier_change_requested must be set through sampleAction'));
     } else if (status === 'returned') {
       url = API + '/products/' + id + '/manager-action';
       method = 'POST';
@@ -471,7 +513,7 @@ export function StoreProvider({
       url = API + '/products/' + id;
       method = 'PUT';
       body = { ...updates, submitterName: currentUser.name, action: 'pending_info' };
-    } else if (status === 'save_draft') {
+    } else if ((status as string) === 'save_draft') {
       url = API + '/products/' + id;
       method = 'PUT';
       const { status: _omit, ...rest } = updates;
@@ -676,7 +718,7 @@ export function StoreProvider({
     const url = API + '/sample-sku-lines/' + skuLineId + '/evaluation';
     const updated = await apiFetch(url, {
       method: 'PUT',
-      body: JSON.stringify({ ...evaluation, operator: currentUser?.name || currentUser?.username || 'Anonymous' }),
+      body: JSON.stringify({ ...evaluation, operator: currentUser?.name || 'Anonymous' }),
     });
     // 只更新对应的SKU行数据，避免全量refetch导致输入卡顿和位置重排
     setSampleSkuLines(prev => prev.map(s => s.id === skuLineId ? updated : s));
@@ -714,7 +756,9 @@ export function StoreProvider({
   return (
       <StoreContext.Provider
       value={{
-        role, currentUser, products, purchaseOrders, sampleOptions, sampleSkuLines, procurementTasks, loading,
+        role, currentUser, products: visibleProducts,
+        managerEmployees, managerEmployeeFilter, setManagerEmployeeFilter,
+        purchaseOrders, sampleOptions, sampleSkuLines, procurementTasks: visibleProcurementTasks, loading,
         logout, addProduct, updateProduct, sampleAction,
         skuPurchaseAction: fastSkuPurchaseAction, completePurchase,
         addPurchaseOrder, updatePurchaseOrderStatus, updatePurchaseOrder,

@@ -14,5 +14,5 @@ export const purchaseOrderLinesTable = pgTable("purchase_order_lines", {
 });
 
 export type InsertPurchaseOrderLine = Omit<typeof purchaseOrderLinesTable.$inferInsert, "id">;
-export const insertPurchaseOrderLineSchema = z.object({}).passthrough() as z.ZodType<InsertPurchaseOrderLine>;
+export const insertPurchaseOrderLineSchema = z.object({}).passthrough() as unknown as z.ZodType<InsertPurchaseOrderLine>;
 export type PurchaseOrderLine = typeof purchaseOrderLinesTable.$inferSelect;
